@@ -164,11 +164,13 @@ def render_dashboard():
         st.session_state.date_range = (rng_start, rng_end)
 
     with col_vendor:
+        # FIX: join with dim_vendor_vw to get vendor_name
         vendor_sql = f"""
-        SELECT DISTINCT vendor_name
-        FROM {DATABASE}.fact_all_sources_vw
-        WHERE vendor_name IS NOT NULL
-        ORDER BY vendor_name
+        SELECT DISTINCT v.vendor_name
+        FROM {DATABASE}.fact_all_sources_vw f
+        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+        WHERE v.vendor_name IS NOT NULL
+        ORDER BY v.vendor_name
         """
         vendors_df = run_query(vendor_sql)
         vendor_list = ["All Vendors"] + vendors_df["vendor_name"].tolist() if not vendors_df.empty else ["All Vendors"]
@@ -320,18 +322,20 @@ def render_dashboard():
 
     with chart_cols[0]:
         st.subheader("Invoice Status")
+        # FIX: join with dim_vendor_vw to support vendor filter
         status_sql = f"""
         SELECT
             CASE
-                WHEN UPPER(invoice_status) IN ('PAID','CLEARED','CLOSED','POSTED','SETTLED') THEN 'Paid'
-                WHEN UPPER(invoice_status) IN ('OPEN','PENDING','ON HOLD','PARKED','IN PROGRESS') THEN 'Pending'
-                WHEN UPPER(invoice_status) IN ('DISPUTE','DISPUTED','BLOCKED','CONTESTED') THEN 'Disputed'
+                WHEN UPPER(f.invoice_status) IN ('PAID','CLEARED','CLOSED','POSTED','SETTLED') THEN 'Paid'
+                WHEN UPPER(f.invoice_status) IN ('OPEN','PENDING','ON HOLD','PARKED','IN PROGRESS') THEN 'Pending'
+                WHEN UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED','BLOCKED','CONTESTED') THEN 'Disputed'
                 ELSE 'Other'
             END AS status,
             COUNT(*) AS cnt
-        FROM {DATABASE}.fact_all_sources_vw
-        WHERE posting_date BETWEEN {start_lit} AND {end_lit}
-        {vendor_where.replace('v.vendor_name', 'vendor_name')}  -- remove alias for this query
+        FROM {DATABASE}.fact_all_sources_vw f
+        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+        WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
+        {vendor_where}
         GROUP BY 1
         """
         status_df = run_query(status_sql)
@@ -370,7 +374,6 @@ def render_dashboard():
 
     with chart_cols[2]:
         st.subheader("Monthly Spend Trend (Actual + Forecast)")
-        # Use the selected end date as reference, show last 12 months
         trend_sql = f"""
         WITH monthly_data AS (
             SELECT
@@ -398,7 +401,6 @@ def render_dashboard():
         """
         trend_df = run_query(trend_sql)
         if not trend_df.empty:
-            # Melt for line chart
             trend_long = trend_df.melt(id_vars=["month"], value_vars=["actual", "forecast"],
                                        var_name="type", value_name="amount")
             chart = alt.Chart(trend_long).mark_line(point=True).encode(
@@ -647,7 +649,6 @@ def render_invoice():
     search_term = st.text_input("Search by Invoice Number or PO Number", placeholder="e.g., INV-12345 or PO-67890")
     if search_term:
         safe_term = search_term.replace("'", "''")
-        # Use query #15 to find matching invoices
         inv_list_sql = f"""
         SELECT DISTINCT
             f.invoice_number AS "INVOICE NUMBER",
@@ -666,12 +667,10 @@ def render_invoice():
         inv_df = run_query(inv_list_sql)
         if not inv_df.empty:
             st.dataframe(inv_df, use_container_width=True)
-            # For the first matching invoice, show full details
             inv_num = inv_df.iloc[0]["INVOICE NUMBER"]
             st.markdown("---")
             st.subheader(f"Invoice Details: {inv_num}")
 
-            # Query #16: single invoice details
             details_sql = f"""
             SELECT
                 f.invoice_number AS "INVOICE NUMBER",
@@ -692,7 +691,6 @@ def render_invoice():
             if not details_df.empty:
                 st.dataframe(details_df, use_container_width=True)
 
-            # Query #17: status history
             hist_sql = f"""
             SELECT
                 invoice_number AS "INVOICE NUMBER",
@@ -708,7 +706,6 @@ def render_invoice():
                 st.subheader("Status History")
                 st.dataframe(hist_df, use_container_width=True)
 
-            # Query #18: vendor information
             vendor_info_sql = f"""
             SELECT DISTINCT
                 v.vendor_id AS "VENDOR ID",
@@ -735,7 +732,6 @@ def render_invoice():
                 st.subheader("Vendor Information")
                 st.dataframe(vendor_df, use_container_width=True)
 
-            # Query #19: company & plant information
             company_sql = f"""
             SELECT DISTINCT
                 f.company_code AS "COMPANY CODE",
@@ -755,7 +751,6 @@ def render_invoice():
         else:
             st.warning("No invoice found for the given search term.")
     else:
-        # Show recent invoices using query #15 (without filters)
         recent_sql = f"""
         SELECT DISTINCT
             f.invoice_number AS "INVOICE NUMBER",
