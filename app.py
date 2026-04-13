@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 # ---------------------------- Athena configuration ----------------------------
-DATABASE = "procure2pay"          # Glue database name (do not include catalog)
+DATABASE = "procure2pay"          # Glue database name
 ATHENA_REGION = "us-east-1"       # your Athena region
 
 session = boto3.Session()
@@ -164,13 +164,14 @@ def render_dashboard():
         st.session_state.date_range = (rng_start, rng_end)
 
     with col_vendor:
-        # FIX: join with dim_vendor_vw to get vendor_name
+        # Query #20: Vendor Dropdown (with date range)
         vendor_sql = f"""
         SELECT DISTINCT v.vendor_name
         FROM {DATABASE}.fact_all_sources_vw f
         LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-        WHERE v.vendor_name IS NOT NULL
-        ORDER BY v.vendor_name
+        WHERE f.posting_date BETWEEN {sql_date(rng_start)} AND {sql_date(rng_end)}
+          AND v.vendor_name IS NOT NULL
+        ORDER BY 1
         """
         vendors_df = run_query(vendor_sql)
         vendor_list = ["All Vendors"] + vendors_df["vendor_name"].tolist() if not vendors_df.empty else ["All Vendors"]
@@ -196,7 +197,7 @@ def render_dashboard():
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
 
-    # ----- KPI queries (current period) -----
+    # ----- KPI queries (current period) – Query #1 with dynamic dates and vendor filter -----
     cur_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -216,7 +217,7 @@ def render_dashboard():
     cur_vend = safe_int(cur_df.loc[0, "active_vendors"]) if not cur_df.empty else 0
     cur_pend = safe_int(cur_df.loc[0, "pending_inv"]) if not cur_df.empty else 0
 
-    # ----- Previous period -----
+    # ----- Previous period – Query #2 -----
     prev_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -261,9 +262,9 @@ def render_dashboard():
             </div>
             """, unsafe_allow_html=True)
 
-    # ----- Advanced KPIs (processing time, first pass, auto rate) -----
+    # ----- Advanced KPIs (processing time, first pass, auto rate) – Queries #3, #4, #5 -----
     avg_processing_sql = f"""
-    SELECT AVG(date_diff('day', posting_date, payment_date)) AS avg_processing_days
+    SELECT AVG(DATE_DIFF('day', posting_date, payment_date)) AS avg_processing_days
     FROM {DATABASE}.fact_all_sources_vw
     WHERE posting_date BETWEEN {start_lit} AND {end_lit}
       AND UPPER(invoice_status) = 'PAID'
@@ -322,21 +323,20 @@ def render_dashboard():
 
     with chart_cols[0]:
         st.subheader("Invoice Status")
-        # FIX: join with dim_vendor_vw to support vendor filter
+        # Query #9 – No join, no vendor filter (old logic)
         status_sql = f"""
         SELECT
             CASE
-                WHEN UPPER(f.invoice_status) IN ('PAID','CLEARED','CLOSED','POSTED','SETTLED') THEN 'Paid'
-                WHEN UPPER(f.invoice_status) IN ('OPEN','PENDING','ON HOLD','PARKED','IN PROGRESS') THEN 'Pending'
-                WHEN UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED','BLOCKED','CONTESTED') THEN 'Disputed'
+                WHEN UPPER(invoice_status) IN ('PAID','CLEARED','CLOSED','POSTED','SETTLED') THEN 'Paid'
+                WHEN UPPER(invoice_status) IN ('OPEN','PENDING','ON HOLD','PARKED','IN PROGRESS') THEN 'Pending'
+                WHEN UPPER(invoice_status) IN ('DISPUTE','DISPUTED','BLOCKED','CONTESTED') THEN 'Disputed'
                 ELSE 'Other'
             END AS status,
             COUNT(*) AS cnt
-        FROM {DATABASE}.fact_all_sources_vw f
-        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-        WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
-        {vendor_where}
+        FROM {DATABASE}.fact_all_sources_vw
+        WHERE posting_date BETWEEN {start_lit} AND {end_lit}
         GROUP BY 1
+        ORDER BY cnt DESC
         """
         status_df = run_query(status_sql)
         if not status_df.empty:
@@ -351,8 +351,11 @@ def render_dashboard():
 
     with chart_cols[1]:
         st.subheader("Top 10 Vendors by Spend")
+        # Query #10 – includes vendor filter
         top_vendors_sql = f"""
-        SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
+        SELECT
+            v.vendor_name,
+            SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
         FROM {DATABASE}.fact_all_sources_vw f
         LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
         WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
@@ -374,6 +377,7 @@ def render_dashboard():
 
     with chart_cols[2]:
         st.subheader("Monthly Spend Trend (Actual + Forecast)")
+        # Query #11 – using current end date as reference
         trend_sql = f"""
         WITH monthly_data AS (
             SELECT
@@ -396,8 +400,7 @@ def render_dashboard():
             actual,
             AVG(actual) OVER (PARTITION BY month_num ORDER BY year_num ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS forecast
         FROM monthly_data
-        ORDER BY month_start DESC
-        LIMIT 12
+        ORDER BY month_start
         """
         trend_df = run_query(trend_sql)
         if not trend_df.empty:
@@ -413,7 +416,7 @@ def render_dashboard():
         else:
             st.info("No trend data")
 
-    # ----- Needs Attention Section -----
+    # ----- Needs Attention Section – Queries #6, #7, #8 -----
     st.markdown("---")
     st.subheader("Needs Attention")
     tab1, tab2, tab3 = st.tabs(["Overdue", "Disputed", "Due Next 30 Days"])
@@ -494,6 +497,7 @@ def render_dashboard():
 # ---------------------------- Cash Flow & GR/IR Page ----------------------------
 def render_cash_flow():
     st.subheader("Cash Flow Forecast")
+    # Query #12
     cf_sql = """
     WITH base AS (
         SELECT document_number, vendor_id, invoice_amount_local, due_date, invoice_status, days_until_due
@@ -570,6 +574,7 @@ def render_cash_flow():
 
     st.markdown("---")
     st.subheader("GR/IR Outstanding Balance (Latest Month)")
+    # Query #13
     grir_summary_sql = """
     WITH latest AS (
         SELECT year, month, invoice_count, total_grir_blnc
@@ -605,6 +610,7 @@ def render_cash_flow():
         st.info("No GR/IR summary data")
 
     st.subheader("GR/IR Trend (Last 24 Months)")
+    # Query #14
     grir_trend_sql = """
     SELECT
         DATE_PARSE(CONCAT(CAST(year AS VARCHAR), '-', LPAD(CAST(month AS VARCHAR), 2, '0'), '-01'), '%Y-%m-%d') AS month_date,
@@ -649,6 +655,7 @@ def render_invoice():
     search_term = st.text_input("Search by Invoice Number or PO Number", placeholder="e.g., INV-12345 or PO-67890")
     if search_term:
         safe_term = search_term.replace("'", "''")
+        # Query #15 – list matching invoices
         inv_list_sql = f"""
         SELECT DISTINCT
             f.invoice_number AS "INVOICE NUMBER",
@@ -671,6 +678,7 @@ def render_invoice():
             st.markdown("---")
             st.subheader(f"Invoice Details: {inv_num}")
 
+            # Query #16 – single invoice details
             details_sql = f"""
             SELECT
                 f.invoice_number AS "INVOICE NUMBER",
@@ -691,6 +699,7 @@ def render_invoice():
             if not details_df.empty:
                 st.dataframe(details_df, use_container_width=True)
 
+            # Query #17 – status history
             hist_sql = f"""
             SELECT
                 invoice_number AS "INVOICE NUMBER",
@@ -706,6 +715,7 @@ def render_invoice():
                 st.subheader("Status History")
                 st.dataframe(hist_df, use_container_width=True)
 
+            # Query #18 – vendor information
             vendor_info_sql = f"""
             SELECT DISTINCT
                 v.vendor_id AS "VENDOR ID",
@@ -732,6 +742,7 @@ def render_invoice():
                 st.subheader("Vendor Information")
                 st.dataframe(vendor_df, use_container_width=True)
 
+            # Query #19 – company & plant information
             company_sql = f"""
             SELECT DISTINCT
                 f.company_code AS "COMPANY CODE",
@@ -751,6 +762,7 @@ def render_invoice():
         else:
             st.warning("No invoice found for the given search term.")
     else:
+        # Query #15 without search filter – show recent invoices
         recent_sql = f"""
         SELECT DISTINCT
             f.invoice_number AS "INVOICE NUMBER",
