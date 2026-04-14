@@ -104,7 +104,7 @@ def pct_delta(cur, prev):
     sign = "+" if change >= 0 else "−"
     return f"{sign}{abs(change):.1f}%", change >= 0, False
 
-# ---------------------------- AI Chat Functions ----------------------------
+# ---------------------------- AI Chat Functions (Fixed Bedrock Invocation) ----------------------------
 SYSTEM_PROMPT = """
 You are an AI assistant that helps users query a procurement database using SQL (Athena/Presto). Given a user's natural language question, generate a valid SQL query for Athena (Presto dialect) based on the following schema.
 
@@ -139,7 +139,9 @@ Important notes:
 """
 
 def ask_bedrock(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
+    """Invoke Amazon Nova Micro with correct system prompt format (array)."""
     try:
+        # Nova requires system as an array of text objects
         body = json.dumps({
             "messages": [
                 {
@@ -147,7 +149,7 @@ def ask_bedrock(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
                     "content": [{"text": prompt}]
                 }
             ],
-            "system": system_prompt,
+            "system": [{"text": system_prompt}],   # Fixed: array of objects
             "inferenceConfig": {
                 "maxTokens": 4096,
                 "temperature": 0.0,
@@ -226,8 +228,8 @@ def auto_chart(df: pd.DataFrame) -> Union[alt.Chart, None]:
         return chart.interactive()
     return None
 
-def render_ai_chat():
-    st.subheader("🤖 AI Analytics Chat")
+def render_yash_nova_ai():
+    st.subheader("🤖 YashNovaAI")
     st.markdown("Ask any question about your procurement data in plain English. The AI will generate SQL, run it on Athena, and explain the results.")
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -329,13 +331,14 @@ with col3:
         st.session_state.page = "invoice"
         st.rerun()
 with col4:
-    if st.button("AI Chat", use_container_width=True, type="primary" if st.session_state.page == "ai_chat" else "secondary"):
-        st.session_state.page = "ai_chat"
+    # Renamed button
+    if st.button("YashNovaAI", use_container_width=True, type="primary" if st.session_state.page == "yash_nova_ai" else "secondary"):
+        st.session_state.page = "yash_nova_ai"
         st.rerun()
 
 st.markdown("<hr style='margin: 1rem 0 1.5rem 0;'>", unsafe_allow_html=True)
 
-# ---------------------------- Dashboard Page ----------------------------
+# ---------------------------- Dashboard Page (unchanged) ----------------------------
 def render_dashboard():
     # Date and vendor filters
     if "preset" not in st.session_state:
@@ -681,7 +684,7 @@ def render_dashboard():
         else:
             st.info("No invoices due in next 30 days")
 
-# ---------------------------- Cash Flow & GR/IR Page ----------------------------
+# ---------------------------- Cash Flow & GR/IR Page (unchanged) ----------------------------
 def render_cash_flow():
     st.subheader("Cash Flow Forecast")
     cf_sql = """
@@ -833,7 +836,7 @@ def render_cash_flow():
     else:
         st.info("No GR/IR aging data")
 
-# ---------------------------- Invoice Details Page ----------------------------
+# ---------------------------- Invoice Details Page (unchanged) ----------------------------
 def render_invoice():
     st.subheader("Invoice Search")
     search_term = st.text_input("Search by Invoice Number or PO Number", placeholder="e.g., INV-12345 or PO-67890")
@@ -970,4 +973,4 @@ elif st.session_state.page == "cash_flow":
 elif st.session_state.page == "invoice":
     render_invoice()
 else:
-    render_ai_chat()
+    render_yash_nova_ai()
