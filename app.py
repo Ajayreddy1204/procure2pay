@@ -8,6 +8,7 @@ import awswrangler as wr
 import json
 import re
 from typing import Union
+from decimal import Decimal
 
 # ---------------------------- Page config ----------------------------
 st.set_page_config(
@@ -26,8 +27,13 @@ athena_client = session.client("athena", region_name=ATHENA_REGION)
 bedrock_runtime = session.client("bedrock-runtime", region_name=ATHENA_REGION)
 
 def run_query(sql: str) -> pd.DataFrame:
+    """Execute SQL on Athena and return DataFrame with Decimal->float conversion."""
     try:
         df = wr.athena.read_sql_query(sql, database=DATABASE, boto3_session=session)
+        # Convert Decimal columns to float to avoid Altair warnings
+        for col in df.columns:
+            if df[col].dtype == object and df[col].apply(lambda x: isinstance(x, Decimal)).any():
+                df[col] = df[col].astype(float)
         return df
     except Exception as e:
         st.error(f"Athena query failed: {e}\nSQL: {sql[:500]}")
@@ -329,7 +335,7 @@ with col4:
 
 st.markdown("<hr style='margin: 1rem 0 1.5rem 0;'>", unsafe_allow_html=True)
 
-# ---------------------------- Dashboard Page (KPIs + Charts + Attention) ----------------------------
+# ---------------------------- Dashboard Page ----------------------------
 def render_dashboard():
     # Date and vendor filters
     if "preset" not in st.session_state:
