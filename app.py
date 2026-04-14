@@ -7,6 +7,7 @@ import boto3
 import awswrangler as wr
 import json
 import re
+from typing import Union   # <-- Added for Python 3.9 compatibility
 
 # ---------------------------- Page config ----------------------------
 st.set_page_config(
@@ -211,7 +212,8 @@ def ensure_limit(sql: str, default_limit: int = 100) -> str:
         return sql
     return f"{sql.rstrip(';')} LIMIT {default_limit}"
 
-def auto_chart(df: pd.DataFrame) -> alt.Chart | None:
+# Fixed type hint for Python 3.9 (no | syntax)
+def auto_chart(df: pd.DataFrame) -> Union[alt.Chart, None]:
     """Automatically create an Altair chart if the dataframe is suitable."""
     if df.empty or len(df) > 200:
         return None
