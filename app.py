@@ -7,7 +7,7 @@ import boto3
 import awswrangler as wr
 import json
 import re
-from typing import Union   # <-- Added for Python 3.9 compatibility
+from typing import Union
 
 # ---------------------------- Page config ----------------------------
 st.set_page_config(
@@ -19,7 +19,6 @@ st.set_page_config(
 # ---------------------------- Athena configuration ----------------------------
 DATABASE = "procure2pay"          # Glue database name
 ATHENA_REGION = "us-east-1"       # your Athena region
-# Use Amazon Nova Micro model (available in Bedrock)
 BEDROCK_MODEL_ID = "amazon.nova-micro-v1:0"
 
 session = boto3.Session()
@@ -35,7 +34,7 @@ def run_query(sql: str) -> pd.DataFrame:
         st.error(f"Athena query failed: {e}\nSQL: {sql[:500]}")
         return pd.DataFrame()
 
-# ---------------------------- Helper functions (original) ----------------------------
+# ---------------------------- Helper functions ----------------------------
 def safe_number(val, default=0.0):
     try:
         if pd.isna(val):
@@ -75,6 +74,7 @@ def compute_range_preset(preset: str):
     return today.replace(day=1), today
 
 def prior_window(start: date, end: date):
+    """Return a prior period of the same length."""
     days = (end - start).days + 1
     prev_end = start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=days - 1)
@@ -84,6 +84,7 @@ def sql_date(d: date) -> str:
     return f"DATE '{d.strftime('%Y-%m-%d')}'"
 
 def build_vendor_where(selected_vendor: str) -> str:
+    """Return SQL WHERE clause for vendor filter; empty string for All Vendors."""
     if selected_vendor == "All Vendors":
         return ""
     safe_vendor = selected_vendor.replace("'", "''")
@@ -100,8 +101,7 @@ def pct_delta(cur, prev):
     sign = "+" if change >= 0 else "−"
     return f"{sign}{abs(change):.1f}%", change >= 0, False
 
-# ---------------------------- AI Chat Functions (Nova Micro) ----------------------------
-# System prompt describing the actual tables/views in procure2pay database
+# ---------------------------- AI Chat Functions ----------------------------
 SYSTEM_PROMPT = """
 You are an AI assistant that helps users query a procurement database using SQL (Athena/Presto). Given a user's natural language question, generate a valid SQL query for Athena (Presto dialect) based on the following schema.
 
@@ -136,12 +136,7 @@ Important notes:
 """
 
 def ask_bedrock(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
-    """
-    Invoke Amazon Nova Micro via Bedrock and return the response text.
-    Uses the required request/response format for Nova models.
-    """
     try:
-        # Nova request body format
         body = json.dumps({
             "messages": [
                 {
@@ -163,25 +158,18 @@ def ask_bedrock(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
             body=body
         )
         response_body = json.loads(response['body'].read())
-        # Nova response: output.message.content[0].text
         return response_body['output']['message']['content'][0]['text']
     except Exception as e:
         st.error(f"Bedrock invocation failed: {e}")
         return ""
 
 def generate_sql(question: str) -> tuple:
-    """Ask Nova to generate SQL and explanation from user question."""
     prompt = f"User question: {question}\n\nGenerate SQL query and explanation as JSON."
     response = ask_bedrock(prompt)
     if not response:
         return None, "Bedrock returned empty response."
-    # Try to extract JSON from the response (in case it includes markdown or extra text)
     json_match = re.search(r'\{.*\}$', response, re.DOTALL)
-    if not json_match:
-        # fallback: assume the whole response is JSON
-        json_str = response
-    else:
-        json_str = json_match.group(0)
+    json_str = json_match.group(0) if json_match else response
     try:
         data = json.loads(json_str)
         sql = data.get("sql", "").strip()
@@ -192,7 +180,6 @@ def generate_sql(question: str) -> tuple:
         return None, "Could not parse SQL from AI response."
 
 def is_safe_sql(sql: str) -> bool:
-    """Basic guard: only allow SELECT statements and prevent dangerous keywords."""
     sql_lower = sql.lower().strip()
     if not sql_lower.startswith("select"):
         return False
@@ -203,16 +190,13 @@ def is_safe_sql(sql: str) -> bool:
     return True
 
 def ensure_limit(sql: str, default_limit: int = 100) -> str:
-    """Add LIMIT if not present and not an aggregation-only query."""
     sql_lower = sql.lower()
     if "limit" in sql_lower:
         return sql
-    # If the query has aggregate functions but no GROUP BY, it's a single row result
     if re.search(r'\b(count|sum|avg|min|max)\b', sql_lower) and "group by" not in sql_lower:
         return sql
     return f"{sql.rstrip(';')} LIMIT {default_limit}"
 
-# Fixed type hint for Python 3.9 (no | syntax)
 def auto_chart(df: pd.DataFrame) -> Union[alt.Chart, None]:
     """Automatically create an Altair chart if the dataframe is suitable."""
     if df.empty or len(df) > 200:
@@ -370,7 +354,7 @@ with col4:
 
 st.markdown("<hr style='margin: 1rem 0 1.5rem 0;'>", unsafe_allow_html=True)
 
-# ---------------------------- Dashboard Page (unchanged) ----------------------------
+# ---------------------------- Dashboard Page ----------------------------
 def render_dashboard():
     # Date and vendor filters
     if "preset" not in st.session_state:
@@ -393,6 +377,7 @@ def render_dashboard():
         st.session_state.date_range = (rng_start, rng_end)
 
     with col_vendor:
+        # Vendor dropdown using the exact SQL query provided
         vendor_sql = f"""
         SELECT DISTINCT v.vendor_name
         FROM {DATABASE}.fact_all_sources_vw f
@@ -425,6 +410,7 @@ def render_dashboard():
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
 
+    # Current period KPIs (Query 1)
     cur_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -444,6 +430,7 @@ def render_dashboard():
     cur_vend = safe_int(cur_df.loc[0, "active_vendors"]) if not cur_df.empty else 0
     cur_pend = safe_int(cur_df.loc[0, "pending_inv"]) if not cur_df.empty else 0
 
+    # Previous period KPIs (Query 2)
     prev_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -487,6 +474,7 @@ def render_dashboard():
             </div>
             """, unsafe_allow_html=True)
 
+    # Avg processing time (Query 3)
     avg_processing_sql = f"""
     SELECT AVG(DATE_DIFF('day', posting_date, payment_date)) AS avg_processing_days
     FROM {DATABASE}.fact_all_sources_vw
@@ -496,6 +484,7 @@ def render_dashboard():
     avg_df = run_query(avg_processing_sql)
     avg_days = safe_number(avg_df.loc[0, "avg_processing_days"]) if not avg_df.empty else 0
 
+    # First pass rate (Query 4)
     first_pass_sql = f"""
     WITH hist AS (
         SELECT invoice_number,
@@ -515,6 +504,7 @@ def render_dashboard():
     fp_inv = safe_int(fp_df.loc[0, "first_pass_inv"]) if not fp_df.empty else 0
     first_pass_rate = (fp_inv / total_inv * 100) if total_inv > 0 else 0
 
+    # Auto-processed rate (Query 5)
     auto_rate_sql = f"""
     WITH paid_invoices AS (
         SELECT invoice_number, status_notes
@@ -544,6 +534,7 @@ def render_dashboard():
     st.markdown("---")
     chart_cols = st.columns(3)
 
+    # Invoice Status Distribution (Query 9)
     with chart_cols[0]:
         st.subheader("Invoice Status")
         status_sql = f"""
@@ -571,6 +562,7 @@ def render_dashboard():
         else:
             st.info("No invoice status data")
 
+    # Top 10 Vendors by Spend (Query 10)
     with chart_cols[1]:
         st.subheader("Top 10 Vendors by Spend")
         top_vendors_sql = f"""
@@ -596,6 +588,7 @@ def render_dashboard():
         else:
             st.info("No vendor spend data")
 
+    # Spend Trend (Actual + Forecast) (Query 11)
     with chart_cols[2]:
         st.subheader("Monthly Spend Trend (Actual + Forecast)")
         trend_sql = f"""
@@ -640,6 +633,7 @@ def render_dashboard():
     st.subheader("Needs Attention")
     tab1, tab2, tab3 = st.tabs(["Overdue", "Disputed", "Due Next 30 Days"])
 
+    # Overdue Invoices (Query 6)
     with tab1:
         overdue_sql = f"""
         SELECT
@@ -652,7 +646,7 @@ def render_dashboard():
         FROM {DATABASE}.fact_all_sources_vw f
         LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
         WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
-          {vendor_where}
+        {vendor_where}
           AND f.due_date < CURRENT_DATE
           AND UPPER(f.invoice_status) IN ('OVERDUE')
         ORDER BY f.due_date ASC
@@ -664,6 +658,7 @@ def render_dashboard():
         else:
             st.info("No overdue invoices")
 
+    # Disputed Invoices (Query 7)
     with tab2:
         disputed_sql = f"""
         SELECT
@@ -676,7 +671,7 @@ def render_dashboard():
         FROM {DATABASE}.fact_all_sources_vw f
         LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
         WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
-          {vendor_where}
+        {vendor_where}
           AND UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED')
         ORDER BY f.due_date ASC
         LIMIT 20
@@ -687,6 +682,7 @@ def render_dashboard():
         else:
             st.info("No disputed invoices")
 
+    # Due Next 30 Days (Query 8)
     with tab3:
         due_sql = f"""
         SELECT
@@ -699,7 +695,7 @@ def render_dashboard():
         FROM {DATABASE}.fact_all_sources_vw f
         LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
         WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
-          {vendor_where}
+        {vendor_where}
           AND f.due_date IS NOT NULL
           AND f.due_date >= CURRENT_DATE
           AND f.due_date <= DATE_ADD('day', 30, CURRENT_DATE)
@@ -713,9 +709,10 @@ def render_dashboard():
         else:
             st.info("No invoices due in next 30 days")
 
-# ---------------------------- Cash Flow & GR/IR Page (unchanged) ----------------------------
+# ---------------------------- Cash Flow & GR/IR Page ----------------------------
 def render_cash_flow():
     st.subheader("Cash Flow Forecast")
+    # Query 12: Cash Flow Forecast
     cf_sql = """
     WITH base AS (
         SELECT document_number, vendor_id, invoice_amount_local, due_date, invoice_status, days_until_due
@@ -792,6 +789,7 @@ def render_cash_flow():
 
     st.markdown("---")
     st.subheader("GR/IR Outstanding Balance (Latest Month)")
+    # Query 13: GR/IR Summary
     grir_summary_sql = """
     WITH latest AS (
         SELECT year, month, invoice_count, total_grir_blnc
@@ -827,6 +825,7 @@ def render_cash_flow():
         st.info("No GR/IR summary data")
 
     st.subheader("GR/IR Trend (Last 24 Months)")
+    # Query 14: GR/IR Trend
     grir_trend_sql = """
     SELECT
         DATE_PARSE(CONCAT(CAST(year AS VARCHAR), '-', LPAD(CAST(month AS VARCHAR), 2, '0'), '-01'), '%Y-%m-%d') AS month_date,
@@ -865,12 +864,13 @@ def render_cash_flow():
     else:
         st.info("No GR/IR aging data")
 
-# ---------------------------- Invoice Details Page (unchanged) ----------------------------
+# ---------------------------- Invoice Details Page ----------------------------
 def render_invoice():
     st.subheader("Invoice Search")
     search_term = st.text_input("Search by Invoice Number or PO Number", placeholder="e.g., INV-12345 or PO-67890")
     if search_term:
         safe_term = search_term.replace("'", "''")
+        # Query 15: All Invoices with Filters
         inv_list_sql = f"""
         SELECT DISTINCT
             f.invoice_number AS "INVOICE NUMBER",
@@ -893,6 +893,7 @@ def render_invoice():
             st.markdown("---")
             st.subheader(f"Invoice Details: {inv_num}")
 
+            # Query 16: Single Invoice Details
             details_sql = f"""
             SELECT
                 f.invoice_number AS "INVOICE NUMBER",
@@ -913,6 +914,7 @@ def render_invoice():
             if not details_df.empty:
                 st.dataframe(details_df, use_container_width=True)
 
+            # Query 17: Status History
             hist_sql = f"""
             SELECT
                 invoice_number AS "INVOICE NUMBER",
@@ -928,6 +930,7 @@ def render_invoice():
                 st.subheader("Status History")
                 st.dataframe(hist_df, use_container_width=True)
 
+            # Query 18: Vendor Information
             vendor_info_sql = f"""
             SELECT DISTINCT
                 v.vendor_id AS "VENDOR ID",
@@ -954,6 +957,7 @@ def render_invoice():
                 st.subheader("Vendor Information")
                 st.dataframe(vendor_df, use_container_width=True)
 
+            # Query 19: Company & Plant Information
             company_sql = f"""
             SELECT DISTINCT
                 f.company_code AS "COMPANY CODE",
@@ -973,6 +977,7 @@ def render_invoice():
         else:
             st.warning("No invoice found for the given search term.")
     else:
+        # Default: show recent invoices (Query 15 with no filters, limit 50)
         recent_sql = f"""
         SELECT DISTINCT
             f.invoice_number AS "INVOICE NUMBER",
