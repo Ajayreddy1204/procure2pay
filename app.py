@@ -653,13 +653,25 @@ def render_dashboard():
     prev_active_vendors = safe_int(prev_df.loc[0, "active_vendors"]) if not prev_df.empty else 0
     prev_pending = safe_int(prev_df.loc[0, "pending_inv"]) if not prev_df.empty else 0
 
-    spend_delta, spend_up, _ = pct_delta(cur_spend, prev_spend)
-    active_pos_delta, active_pos_up, _ = pct_delta(cur_active_pos, prev_active_pos)
-    total_pos_delta, total_pos_up, _ = pct_delta(cur_total_pos, prev_total_pos)
-    active_vendors_delta, active_vendors_up, _ = pct_delta(cur_active_vendors, prev_active_vendors)
-    pending_delta, pending_up, _ = pct_delta(cur_pending, prev_pending)
+    # Calculate deltas and format delta strings with explicit arrows and colors (handled by st.metric)
+    def format_delta(cur, prev):
+        if prev == 0:
+            if cur == 0:
+                return "0%"
+            return "↑ +100%"
+        change = (cur - prev) / prev * 100
+        if abs(change) < 0.05:
+            return "0%"
+        sign = "↑" if change >= 0 else "↓"
+        return f"{sign} {change:+.1f}%".replace("+", "+")  # e.g., "↓ -59.7%" or "↑ +100.0%"
 
-    # First pass and auto-processed rates
+    spend_delta = format_delta(cur_spend, prev_spend)
+    active_pos_delta = format_delta(cur_active_pos, prev_active_pos)
+    total_pos_delta = format_delta(cur_total_pos, prev_total_pos)
+    active_vendors_delta = format_delta(cur_active_vendors, prev_active_vendors)
+    pending_delta = format_delta(cur_pending, prev_pending)
+
+    # First pass and auto-processed rates (no deltas needed)
     first_pass_sql = f"""
     WITH hist AS (
         SELECT invoice_number,
@@ -696,20 +708,20 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
-    # Display KPI cards (two rows)
+    # Display KPI cards (two rows of 4)
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=f"{'↑' if spend_up else '↓'} {spend_delta}", delta_color="normal")
+        st.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
     with col2:
-        st.metric("ACTIVE PO'S", f"{cur_active_pos:,}", delta=f"{'↑' if active_pos_up else '↓'} {active_pos_delta}", delta_color="normal")
+        st.metric("ACTIVE PO'S", f"{cur_active_pos:,}", delta=active_pos_delta, delta_color="normal")
     with col3:
-        st.metric("TOTAL PO'S", f"{cur_total_pos:,}", delta=f"{'↑' if total_pos_up else '↓'} {total_pos_delta}", delta_color="normal")
+        st.metric("TOTAL PO'S", f"{cur_total_pos:,}", delta=total_pos_delta, delta_color="normal")
     with col4:
-        st.metric("ACTIVE VENDORS", f"{cur_active_vendors:,}", delta=f"{'↑' if active_vendors_up else '↓'} {active_vendors_delta}", delta_color="normal")
+        st.metric("ACTIVE VENDORS", f"{cur_active_vendors:,}", delta=active_vendors_delta, delta_color="normal")
 
     col5, col6, col7, col8 = st.columns(4)
     with col5:
-        st.metric("PENDING INVOICES", f"{cur_pending:,}", delta=f"{'↑' if pending_up else '↓'} {pending_delta}", delta_color="normal")
+        st.metric("PENDING INVOICES", f"{cur_pending:,}", delta=pending_delta, delta_color="normal")
     with col6:
         st.metric("AVG INVOICE PROCESSING TIME", f"{cur_avg_processing:.1f}d")
     with col7:
@@ -754,7 +766,7 @@ def render_dashboard():
             if st.button(f"⚠️ Overdue ({len(attention_df[attention_df['attention_type']=='Overdue'])})", use_container_width=True):
                 st.session_state.page = "Invoices"
                 st.session_state.invoice_status_filter = "OVERDUE"
-                st.session_state.attention_page = 0  # reset pagination
+                st.session_state.attention_page = 0
                 st.rerun()
         with col_type2:
             if st.button(f"⚖️ Disputed ({len(attention_df[attention_df['attention_type']=='Disputed'])})", use_container_width=True):
@@ -781,7 +793,6 @@ def render_dashboard():
         end_idx = min(start_idx + items_per_page, total_items)
         page_df = attention_df.iloc[start_idx:end_idx]
 
-        # Convert to list of rows
         rows = page_df.to_dict('records')
         # Display in 2 rows of 5 columns
         for i in range(0, len(rows), 5):
@@ -794,7 +805,6 @@ def render_dashboard():
                     amount = row['amount']
                     due_date = row['due_date']
                     att_type = row['attention_type']
-                    # Choose color based on type
                     if att_type == "Overdue":
                         border_color = "#ef4444"
                         bg_color = "#fee2e2"
