@@ -92,7 +92,6 @@ def build_vendor_where(selected_vendor: str) -> str:
     return f"AND UPPER(v.vendor_name) = UPPER('{safe_vendor}')"
 
 def pct_delta(cur, prev):
-    """Return (delta_string, is_positive) where delta_string includes arrow and sign."""
     if prev == 0:
         if cur == 0:
             return "0%", True
@@ -582,11 +581,25 @@ def load_custom_css():
         margin-top: 0;
         padding-top: 0;
     }
+    /* Adjust top bar layout */
+    .top-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+    .nav-buttons {
+        display: flex;
+        gap: 0.5rem;
+    }
+    .logo-right {
+        margin-left: auto;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 def render_dashboard():
-    load_custom_css()  # apply custom button styling
+    load_custom_css()
 
     # Date range state
     if "preset" not in st.session_state:
@@ -594,7 +607,7 @@ def render_dashboard():
     if "date_range" not in st.session_state:
         st.session_state.date_range = compute_range_preset(st.session_state.preset)
 
-    # Date range picker and vendor filter
+    # --- Filters row (third line) ---
     col_date, col_vendor, col_preset = st.columns([2, 2, 3])
     with col_date:
         date_range = st.date_input(
@@ -685,7 +698,6 @@ def render_dashboard():
     prev_active_vendors = safe_int(prev_df.loc[0, "active_vendors"]) if not prev_df.empty else 0
     prev_pending = safe_int(prev_df.loc[0, "pending_inv"]) if not prev_df.empty else 0
 
-    # Compute delta strings
     spend_delta, _ = pct_delta(cur_spend, prev_spend)
     active_pos_delta, _ = pct_delta(cur_active_pos, prev_active_pos)
     total_pos_delta, _ = pct_delta(cur_total_pos, prev_total_pos)
@@ -729,7 +741,7 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
-    # Display KPI cards (two rows of 4) with colored deltas
+    # Display KPI cards (two rows of 4)
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
@@ -755,7 +767,6 @@ def render_dashboard():
     # --- Needs Attention Section (Paginated Grid: 2 rows × 5 columns) ---
     st.subheader("Needs Attention")
 
-    # Fetch all attention data
     attention_sql = f"""
     SELECT
         f.invoice_number,
@@ -781,7 +792,6 @@ def render_dashboard():
     """
     attention_df = run_query(attention_sql)
     if not attention_df.empty:
-        # Filter buttons
         col_type1, col_type2, col_type3 = st.columns(3)
         with col_type1:
             if st.button(f"⚠️ Overdue ({len(attention_df[attention_df['attention_type']=='Overdue'])})", use_container_width=True):
@@ -804,7 +814,6 @@ def render_dashboard():
 
         st.markdown("---")
 
-        # Pagination
         items_per_page = 10
         total_items = len(attention_df)
         if "attention_page" not in st.session_state:
@@ -815,7 +824,6 @@ def render_dashboard():
         page_df = attention_df.iloc[start_idx:end_idx]
 
         rows = page_df.to_dict('records')
-        # Display in 2 rows of 5 columns
         for i in range(0, len(rows), 5):
             cols = st.columns(5)
             for col_idx, col in enumerate(cols):
@@ -836,7 +844,6 @@ def render_dashboard():
                         border_color = "#3b82f6"
                         bg_color = "#dbeafe"
                     with col:
-                        # Card container with border and background
                         st.markdown(f"""
                         <div style="border: 1px solid {border_color}; border-radius: 12px; padding: 0.5rem; background-color: {bg_color}; margin-bottom: 0.5rem;">
                             <div style="font-weight: bold; margin-bottom: 0.25rem;">{vendor}</div>
@@ -845,13 +852,11 @@ def render_dashboard():
                             <div style="font-size: 0.7rem; margin-bottom: 0.5rem;">Due: {due_date}</div>
                         </div>
                         """, unsafe_allow_html=True)
-                        # Invoice number button (placed inside the same column, directly after the card)
                         if st.button(f"📄 Invoice {inv_num}", key=f"att_{inv_num}_{start_idx+col_idx}", use_container_width=True):
                             st.session_state.page = "Invoices"
                             st.session_state.invoice_search_term = str(inv_num)
                             st.rerun()
 
-        # Pagination controls
         col_prev, col_page_info, col_next = st.columns([1, 2, 1])
         with col_prev:
             if st.button("← Prev", disabled=(st.session_state.attention_page == 0)):
@@ -898,7 +903,7 @@ def render_dashboard():
     else:
         st.info("No invoice status data")
 
-    # 2. Top 10 Vendors by Spend (with percentages)
+    # 2. Top 10 Vendors by Spend
     top_vendors_sql = f"""
     SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
     FROM {DATABASE}.fact_all_sources_vw f
@@ -922,7 +927,7 @@ def render_dashboard():
     else:
         st.info("No vendor spend data")
 
-    # 3. Monthly Spend Trend (Actual + Forecast)
+    # 3. Monthly Spend Trend
     trend_sql = f"""
     WITH monthly_data AS (
         SELECT
@@ -961,35 +966,37 @@ def render_dashboard():
     else:
         st.info("No trend data")
 
-# ---------------------------- Main App Layout ----------------------------
-# Top-left logo and title
+# ---------------------------- Main App Layout with new header ----------------------------
 logo_url = "https://th.bing.com/th/id/OIP.Vy1yFQtg8-D1SsAxcqqtSgHaE6?w=235&h=180&c=7&r=0&o=7&dpr=1.5&pid=1.7&rm=3"
 
-header_cols = st.columns([1, 4])
-with header_cols[0]:
+# First line: procure2pay (bold), nav buttons, logo on right
+col_title, col_nav, col_logo = st.columns([1, 3, 1])
+with col_title:
+    st.markdown("<h1 style='font-weight: bold; margin-bottom: 0;'>procure2pay</h1>", unsafe_allow_html=True)
+with col_nav:
+    # Navigation buttons
+    nav_cols = st.columns(4)
+    with nav_cols[0]:
+        if st.button("Dashboard", use_container_width=True):
+            st.session_state.page = "Dashboard"
+            st.rerun()
+    with nav_cols[1]:
+        if st.button("Genie", use_container_width=True):
+            st.session_state.page = "Genie"
+            st.rerun()
+    with nav_cols[2]:
+        if st.button("Forecast", use_container_width=True):
+            st.session_state.page = "Forecast"
+            st.rerun()
+    with nav_cols[3]:
+        if st.button("Invoices", use_container_width=True):
+            st.session_state.page = "Invoices"
+            st.rerun()
+with col_logo:
     st.image(logo_url, width=50)
-with header_cols[1]:
-    st.markdown("## ProcureIQ")
-    st.caption("P2P Analytics")
 
-# Top navigation bar
-nav_cols = st.columns(4)
-with nav_cols[0]:
-    if st.button("Dashboard", use_container_width=True):
-        st.session_state.page = "Dashboard"
-        st.rerun()
-with nav_cols[1]:
-    if st.button("Genie", use_container_width=True):
-        st.session_state.page = "Genie"
-        st.rerun()
-with nav_cols[2]:
-    if st.button("Forecast", use_container_width=True):
-        st.session_state.page = "Forecast"
-        st.rerun()
-with nav_cols[3]:
-    if st.button("Invoices", use_container_width=True):
-        st.session_state.page = "Invoices"
-        st.rerun()
+# Second line: subtitle
+st.markdown("<p style='font-size: 0.9rem; color: gray; margin-top: -0.5rem;'>p2pAnalytics</p>", unsafe_allow_html=True)
 
 st.markdown("---")
 
