@@ -27,7 +27,6 @@ athena_client = session.client("athena", region_name=ATHENA_REGION)
 bedrock_runtime = session.client("bedrock-runtime", region_name=ATHENA_REGION)
 
 def run_query(sql: str) -> pd.DataFrame:
-    """Execute SQL on Athena and return DataFrame with Decimal->float conversion."""
     try:
         df = wr.athena.read_sql_query(sql, database=DATABASE, boto3_session=session)
         for col in df.columns:
@@ -413,7 +412,6 @@ def render_invoices(initial_invoice_number=None):
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
 
-    # If an invoice number is passed from dashboard, pre-fill search
     if initial_invoice_number:
         st.session_state.invoice_search_term = str(initial_invoice_number)
     else:
@@ -448,7 +446,6 @@ def render_invoices(initial_invoice_number=None):
         if selected_status == "DUE_NEXT_30":
             selected_status = "OPEN"
 
-    # Build where clause
     where = []
     if search_term:
         safe_term = search_term.replace("'", "''")
@@ -481,7 +478,6 @@ def render_invoices(initial_invoice_number=None):
     df = run_query(query)
     if not df.empty:
         st.dataframe(df, use_container_width=True, height=400)
-        # If a single invoice is searched, show detailed view
         if search_term and len(df) == 1:
             inv_num = df.iloc[0]["INVOICE NUMBER"]
             st.markdown("---")
@@ -700,7 +696,7 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
-    # Display KPI cards
+    # Display KPI cards (two rows)
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=f"{'↑' if spend_up else '↓'} {spend_delta}", delta_color="normal")
@@ -723,9 +719,10 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # --- Needs Attention Section ---
+    # --- Needs Attention Section (Horizontal Grid: 2 rows x 5 columns) ---
     st.subheader("Needs Attention")
 
+    # Fetch attention data (overdue, disputed, due next 30 days) – limit to 10 most urgent
     attention_sql = f"""
     SELECT
         f.invoice_number,
@@ -748,10 +745,11 @@ def render_dashboard():
           OR (f.due_date >= CURRENT_DATE AND f.due_date <= DATE_ADD('day', 30, CURRENT_DATE) AND UPPER(f.invoice_status) = 'OPEN')
       )
     ORDER BY f.due_date ASC
+    LIMIT 10
     """
     attention_df = run_query(attention_sql)
     if not attention_df.empty:
-        # Filter buttons
+        # Buttons to filter by type (navigate to Invoices)
         col_type1, col_type2, col_type3 = st.columns(3)
         with col_type1:
             if st.button(f"⚠️ Overdue ({len(attention_df[attention_df['attention_type']=='Overdue'])})", use_container_width=True):
@@ -770,70 +768,150 @@ def render_dashboard():
                 st.rerun()
 
         st.markdown("---")
-        # Pagination
-        items_per_page = 8
-        total_items = len(attention_df)
-        if "attention_page" not in st.session_state:
-            st.session_state.attention_page = 0
-        total_pages = (total_items - 1) // items_per_page + 1 if total_items > 0 else 1
-        start_idx = st.session_state.attention_page * items_per_page
-        end_idx = min(start_idx + items_per_page, total_items)
-        page_df = attention_df.iloc[start_idx:end_idx]
-
-        # Display each item as a card with clickable invoice number
-        for _, row in page_df.iterrows():
-            inv_num = row['invoice_number']
-            vendor = row['vendor_name']
-            amount = row['amount']
-            due_date = row['due_date']
-            att_type = row['attention_type']
-            if att_type == "Overdue":
-                border_color = "#ef4444"
-                bg_color = "#fee2e2"
-            elif att_type == "Disputed":
-                border_color = "#f59e0b"
-                bg_color = "#fef3c7"
-            else:
-                border_color = "#3b82f6"
-                bg_color = "#dbeafe"
-
-            # Make the invoice number clickable
-            clickable_inv = f"<a href='javascript:void(0)' onclick='window.parent.document.querySelector(\"[data-testid=\\\"stMarkdownContainer\\\"]\").dispatchEvent(new Event(\"click\"));' style='cursor: pointer; text-decoration: underline;'>{inv_num}</a>"
-            # Instead of HTML link, we use Streamlit button inside columns – but we can use st.markdown with a callback via session state.
-            # Simpler: use a button that sets session state and reruns.
-            # We'll create a row with columns: left side (invoice number + vendor), right side (amount + due date)
-            col_a, col_b = st.columns([3, 2])
-            with col_a:
-                # Display invoice number as a clickable button (looks like text)
-                if st.button(f"📄 {inv_num}", key=f"inv_{inv_num}", use_container_width=False):
-                    st.session_state.page = "Invoices"
-                    st.session_state.invoice_search_term = str(inv_num)
-                    st.rerun()
-                st.caption(vendor)
-            with col_b:
-                st.markdown(f"<strong>{abbr_currency(amount)}</strong><br><span style='font-size: 0.7rem;'>Due: {due_date}</span>", unsafe_allow_html=True)
-            st.markdown(f"<div style='border-left: 4px solid {border_color}; background-color: {bg_color}; border-radius: 12px; padding: 0.5rem; margin-bottom: 0.5rem;'></div>", unsafe_allow_html=True)
-
-        # Pagination controls
-        col_prev, col_page_info, col_next = st.columns([1, 2, 1])
-        with col_prev:
-            if st.button("← Prev", disabled=(st.session_state.attention_page == 0)):
-                st.session_state.attention_page -= 1
-                st.rerun()
-        with col_page_info:
-            st.markdown(f"<div style='text-align: center;'>{st.session_state.attention_page + 1} of {total_pages}</div>", unsafe_allow_html=True)
-        with col_next:
-            if st.button("Next →", disabled=(st.session_state.attention_page >= total_pages - 1)):
-                st.session_state.attention_page += 1
-                st.rerun()
+        # Display in 2 rows, 5 columns
+        # Convert dataframe to list of rows
+        rows = attention_df.to_dict('records')
+        # Ensure we have at most 10 items
+        rows = rows[:10]
+        # Create rows of 5
+        for i in range(0, len(rows), 5):
+            cols = st.columns(5)
+            for col_idx, col in enumerate(cols):
+                if i + col_idx < len(rows):
+                    row = rows[i + col_idx]
+                    inv_num = row['invoice_number']
+                    vendor = row['vendor_name']
+                    amount = row['amount']
+                    due_date = row['due_date']
+                    att_type = row['attention_type']
+                    # Choose color based on type
+                    if att_type == "Overdue":
+                        border_color = "#ef4444"
+                        bg_color = "#fee2e2"
+                    elif att_type == "Disputed":
+                        border_color = "#f59e0b"
+                        bg_color = "#fef3c7"
+                    else:
+                        border_color = "#3b82f6"
+                        bg_color = "#dbeafe"
+                    # Render a card inside the column
+                    with col:
+                        st.markdown(f"""
+                        <div style="border: 1px solid {border_color}; border-radius: 12px; padding: 0.75rem; background-color: {bg_color}; margin-bottom: 0.5rem;">
+                            <div style="font-weight: bold;">{vendor}</div>
+                            <div style="font-size: 0.8rem; color: {border_color};">{att_type}</div>
+                            <div style="font-size: 1.2rem; font-weight: 600;">{abbr_currency(amount)}</div>
+                            <div style="font-size: 0.7rem;">Due: {due_date}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        # Clickable invoice number button
+                        if st.button(f"📄 {inv_num}", key=f"att_{inv_num}", use_container_width=True):
+                            st.session_state.page = "Invoices"
+                            st.session_state.invoice_search_term = str(inv_num)
+                            st.rerun()
     else:
         st.info("No attention items found for the selected period.")
+
+    st.markdown("---")
+
+    # ---------------------------- Charts Section ----------------------------
+    st.subheader("Analytics")
+
+    # 1. Invoice Status Pie Chart
+    status_sql = f"""
+    SELECT
+        CASE
+            WHEN UPPER(invoice_status) IN ('PAID','CLEARED','CLOSED','POSTED','SETTLED') THEN 'Paid'
+            WHEN UPPER(invoice_status) IN ('OPEN','PENDING','ON HOLD','PARKED','IN PROGRESS') THEN 'Pending'
+            WHEN UPPER(invoice_status) IN ('DISPUTE','DISPUTED','BLOCKED','CONTESTED') THEN 'Disputed'
+            ELSE 'Other'
+        END AS status,
+        COUNT(*) AS cnt
+    FROM {DATABASE}.fact_all_sources_vw
+    WHERE posting_date BETWEEN {start_lit} AND {end_lit}
+    GROUP BY 1
+    """
+    status_df = run_query(status_sql)
+    if not status_df.empty:
+        total = status_df['cnt'].sum()
+        status_df['percentage'] = (status_df['cnt'] / total * 100).round(1)
+        # Create pie chart
+        pie = alt.Chart(status_df).mark_arc(innerRadius=40).encode(
+            theta=alt.Theta(field="cnt", type="quantitative"),
+            color=alt.Color(field="status", type="nominal", scale=alt.Scale(scheme="pastel1")),
+            tooltip=["status", "cnt", alt.Tooltip("percentage:Q", format=".1f")]
+        ).properties(title="Invoice Status", height=300)
+        st.altair_chart(pie, use_container_width=True)
+    else:
+        st.info("No invoice status data")
+
+    # 2. Top 10 Vendors by Spend (with percentages)
+    top_vendors_sql = f"""
+    SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
+    FROM {DATABASE}.fact_all_sources_vw f
+    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
+    {vendor_where}
+    GROUP BY 1
+    ORDER BY spend DESC
+    LIMIT 10
+    """
+    top_df = run_query(top_vendors_sql)
+    if not top_df.empty:
+        total_spend = top_df['spend'].sum()
+        top_df['percentage'] = (top_df['spend'] / total_spend * 100).round(1)
+        bar = alt.Chart(top_df).mark_bar(color="#1e88e5", cornerRadiusTopLeft=4).encode(
+            x=alt.X("spend:Q", axis=alt.Axis(title="Spend", format="~s")),
+            y=alt.Y("vendor_name:N", sort="-x", axis=alt.Axis(title=None)),
+            tooltip=["vendor_name", alt.Tooltip("spend:Q", format=",.0f"), alt.Tooltip("percentage:Q", format=".1f")]
+        ).properties(title="Top 10 Vendors by Spend", height=300)
+        st.altair_chart(bar, use_container_width=True)
+    else:
+        st.info("No vendor spend data")
+
+    # 3. Monthly Spend Trend (Actual + Forecast)
+    trend_sql = f"""
+    WITH monthly_data AS (
+        SELECT
+            DATE_TRUNC('month', posting_date) AS month_start,
+            EXTRACT(year FROM posting_date) AS year_num,
+            EXTRACT(month FROM posting_date) AS month_num,
+            DATE_FORMAT(posting_date, '%Y-%m') AS month,
+            SUM(CASE WHEN UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
+                     THEN COALESCE(invoice_amount_local, 0) ELSE 0 END) AS actual
+        FROM {DATABASE}.fact_all_sources_vw
+        WHERE posting_date >= DATE_ADD('year', -2, {end_lit})
+          AND posting_date <= {end_lit}
+        GROUP BY 1, 2, 3, 4
+    )
+    SELECT
+        month_start,
+        year_num,
+        month_num,
+        month,
+        actual,
+        AVG(actual) OVER (PARTITION BY month_num ORDER BY year_num ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS forecast
+    FROM monthly_data
+    ORDER BY month_start
+    """
+    trend_df = run_query(trend_sql)
+    if not trend_df.empty:
+        trend_long = trend_df.melt(id_vars=["month"], value_vars=["actual", "forecast"],
+                                   var_name="type", value_name="amount")
+        line = alt.Chart(trend_long).mark_line(point=True).encode(
+            x=alt.X("month:N", axis=alt.Axis(title=None, labelAngle=-45)),
+            y=alt.Y("amount:Q", axis=alt.Axis(title="Spend", format="~s")),
+            color=alt.Color("type:N", scale=alt.Scale(domain=["actual", "forecast"], range=["#1e88e5", "#ffb74d"])),
+            tooltip=["month", "type", alt.Tooltip("amount:Q", format=",.0f")]
+        ).properties(title="Monthly Spend Trend (Actual + Forecast)", height=300)
+        st.altair_chart(line, use_container_width=True)
+    else:
+        st.info("No trend data")
 
 # ---------------------------- Main App Layout ----------------------------
 # Top-left logo and title
 logo_url = "https://th.bing.com/th/id/OIP.Vy1yFQtg8-D1SsAxcqqtSgHaE6?w=235&h=180&c=7&r=0&o=7&dpr=1.5&pid=1.7&rm=3"
 
-# Header with logo and top navigation
 header_cols = st.columns([1, 4])
 with header_cols[0]:
     st.image(logo_url, width=50)
@@ -841,7 +919,7 @@ with header_cols[1]:
     st.markdown("## ProcureIQ")
     st.caption("P2P Analytics")
 
-# Top navigation bar (no sidebar)
+# Top navigation bar
 nav_cols = st.columns(4)
 with nav_cols[0]:
     if st.button("Dashboard", use_container_width=True):
