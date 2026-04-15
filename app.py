@@ -30,7 +30,6 @@ def run_query(sql: str) -> pd.DataFrame:
     """Execute SQL on Athena and return DataFrame with Decimal->float conversion."""
     try:
         df = wr.athena.read_sql_query(sql, database=DATABASE, boto3_session=session)
-        # Convert Decimal columns to float to avoid Altair warnings
         for col in df.columns:
             if df[col].dtype == object and df[col].apply(lambda x: isinstance(x, Decimal)).any():
                 df[col] = df[col].astype(float)
@@ -104,7 +103,7 @@ def pct_delta(cur, prev):
     sign = "+" if change >= 0 else "−"
     return f"{sign}{abs(change):.1f}%", change >= 0, False
 
-# ---------------------------- AI Chat Functions (Bedrock) ----------------------------
+# ---------------------------- AI Chat Functions (unchanged) ----------------------------
 SYSTEM_PROMPT = """
 You are an AI assistant that helps users query a procurement database using SQL (Athena/Presto). Given a user's natural language question, generate a valid SQL query for Athena (Presto dialect) based on the following schema.
 
@@ -139,7 +138,6 @@ Important notes:
 """
 
 def ask_bedrock(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
-    """Invoke Amazon Nova Micro with correct system prompt format (array)."""
     try:
         body = json.dumps({
             "messages": [
@@ -411,23 +409,26 @@ def render_forecast():
     else:
         st.info("No GR/IR summary data")
 
-def render_invoices(initial_status_filter=None):
+def render_invoices(initial_invoice_number=None):
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
 
-    # If a filter is passed from dashboard, set it in session state
-    if initial_status_filter and initial_status_filter != "All Status":
-        st.session_state.invoice_status_filter = initial_status_filter
+    # If an invoice number is passed from dashboard, pre-fill search
+    if initial_invoice_number:
+        st.session_state.invoice_search_term = str(initial_invoice_number)
     else:
-        st.session_state.invoice_status_filter = st.session_state.get("invoice_status_filter", "All Status")
+        st.session_state.invoice_search_term = st.session_state.get("invoice_search_term", "")
 
-    # Search and filters
     col1, col2 = st.columns([3, 1])
     with col1:
-        search_term = st.text_input("Search by Invoice or PO Number", placeholder="e.g., 9000946", label_visibility="collapsed")
+        search_term = st.text_input("Search by Invoice or PO Number", 
+                                    value=st.session_state.invoice_search_term,
+                                    placeholder="e.g., 9000946", 
+                                    label_visibility="collapsed",
+                                    key="invoice_search_input")
     with col2:
         if st.button("Reset"):
-            search_term = ""
+            st.session_state.invoice_search_term = ""
             st.session_state.invoice_status_filter = "All Status"
             st.rerun()
 
@@ -440,8 +441,9 @@ def render_invoices(initial_status_filter=None):
         selected_vendor = st.selectbox("Vendor", vendor_list)
     with col_status:
         status_options = ["All Status", "OPEN", "PAID", "DISPUTED", "OVERDUE", "DUE_NEXT_30"]
-        status_map = {"All Status": "All Status", "OPEN": "OPEN", "PAID": "PAID", "DISPUTED": "DISPUTED", "OVERDUE": "OVERDUE", "DUE_NEXT_30": "OPEN (Due Next 30)"}
-        selected_status_display = st.selectbox("Status", status_options, index=status_options.index(st.session_state.invoice_status_filter) if st.session_state.invoice_status_filter in status_options else 0)
+        selected_status_display = st.selectbox("Status", status_options, 
+                                               index=status_options.index(st.session_state.get("invoice_status_filter", "All Status")) 
+                                               if st.session_state.get("invoice_status_filter", "All Status") in status_options else 0)
         selected_status = selected_status_display
         if selected_status == "DUE_NEXT_30":
             selected_status = "OPEN"
@@ -564,7 +566,7 @@ def render_dashboard():
     if "date_range" not in st.session_state:
         st.session_state.date_range = compute_range_preset(st.session_state.preset)
 
-    # Date range picker and vendor filter (keep from original)
+    # Date range picker and vendor filter
     col_date, col_vendor, col_preset = st.columns([2, 2, 3])
     with col_date:
         date_range = st.date_input(
@@ -613,7 +615,6 @@ def render_dashboard():
     vendor_where = build_vendor_where(selected_vendor)
 
     # --- KPI Queries ---
-    # Current period
     cur_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -636,7 +637,6 @@ def render_dashboard():
     cur_pending = safe_int(cur_df.loc[0, "pending_inv"]) if not cur_df.empty else 0
     cur_avg_processing = safe_number(cur_df.loc[0, "avg_processing_days"]) if not cur_df.empty else 0
 
-    # Previous period for deltas
     prev_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -663,7 +663,7 @@ def render_dashboard():
     active_vendors_delta, active_vendors_up, _ = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, pending_up, _ = pct_delta(cur_pending, prev_pending)
 
-    # First pass rate and auto-processed rate
+    # First pass and auto-processed rates
     first_pass_sql = f"""
     WITH hist AS (
         SELECT invoice_number,
@@ -700,7 +700,7 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
-    # Display KPI cards (first row)
+    # Display KPI cards
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=f"{'↑' if spend_up else '↓'} {spend_delta}", delta_color="normal")
@@ -711,7 +711,6 @@ def render_dashboard():
     with col4:
         st.metric("ACTIVE VENDORS", f"{cur_active_vendors:,}", delta=f"{'↑' if active_vendors_up else '↓'} {active_vendors_delta}", delta_color="normal")
 
-    # Second row of KPIs
     col5, col6, col7, col8 = st.columns(4)
     with col5:
         st.metric("PENDING INVOICES", f"{cur_pending:,}", delta=f"{'↑' if pending_up else '↓'} {pending_delta}", delta_color="normal")
@@ -724,10 +723,9 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # --- Needs Attention Section with Pagination ---
+    # --- Needs Attention Section ---
     st.subheader("Needs Attention")
 
-    # Fetch attention data (overdue, disputed, due next 30 days)
     attention_sql = f"""
     SELECT
         f.invoice_number,
@@ -753,7 +751,7 @@ def render_dashboard():
     """
     attention_df = run_query(attention_sql)
     if not attention_df.empty:
-        # Buttons to navigate to Invoices page with filter
+        # Filter buttons
         col_type1, col_type2, col_type3 = st.columns(3)
         with col_type1:
             if st.button(f"⚠️ Overdue ({len(attention_df[attention_df['attention_type']=='Overdue'])})", use_container_width=True):
@@ -772,7 +770,7 @@ def render_dashboard():
                 st.rerun()
 
         st.markdown("---")
-        # Pagination for the list
+        # Pagination
         items_per_page = 8
         total_items = len(attention_df)
         if "attention_page" not in st.session_state:
@@ -782,7 +780,7 @@ def render_dashboard():
         end_idx = min(start_idx + items_per_page, total_items)
         page_df = attention_df.iloc[start_idx:end_idx]
 
-        # Display each item as a card
+        # Display each item as a card with clickable invoice number
         for _, row in page_df.iterrows():
             inv_num = row['invoice_number']
             vendor = row['vendor_name']
@@ -798,18 +796,23 @@ def render_dashboard():
             else:
                 border_color = "#3b82f6"
                 bg_color = "#dbeafe"
-            st.markdown(f"""
-            <div style="border-left: 4px solid {border_color}; background-color: {bg_color}; border-radius: 12px; padding: 0.75rem; margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <strong>{inv_num}</strong><br>
-                    <span style="font-size: 0.8rem;">{vendor}</span>
-                </div>
-                <div style="text-align: right;">
-                    <strong>{abbr_currency(amount)}</strong><br>
-                    <span style="font-size: 0.7rem;">Due: {due_date}</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+
+            # Make the invoice number clickable
+            clickable_inv = f"<a href='javascript:void(0)' onclick='window.parent.document.querySelector(\"[data-testid=\\\"stMarkdownContainer\\\"]\").dispatchEvent(new Event(\"click\"));' style='cursor: pointer; text-decoration: underline;'>{inv_num}</a>"
+            # Instead of HTML link, we use Streamlit button inside columns – but we can use st.markdown with a callback via session state.
+            # Simpler: use a button that sets session state and reruns.
+            # We'll create a row with columns: left side (invoice number + vendor), right side (amount + due date)
+            col_a, col_b = st.columns([3, 2])
+            with col_a:
+                # Display invoice number as a clickable button (looks like text)
+                if st.button(f"📄 {inv_num}", key=f"inv_{inv_num}", use_container_width=False):
+                    st.session_state.page = "Invoices"
+                    st.session_state.invoice_search_term = str(inv_num)
+                    st.rerun()
+                st.caption(vendor)
+            with col_b:
+                st.markdown(f"<strong>{abbr_currency(amount)}</strong><br><span style='font-size: 0.7rem;'>Due: {due_date}</span>", unsafe_allow_html=True)
+            st.markdown(f"<div style='border-left: 4px solid {border_color}; background-color: {bg_color}; border-radius: 12px; padding: 0.5rem; margin-bottom: 0.5rem;'></div>", unsafe_allow_html=True)
 
         # Pagination controls
         col_prev, col_page_info, col_next = st.columns([1, 2, 1])
@@ -829,31 +832,46 @@ def render_dashboard():
 # ---------------------------- Main App Layout ----------------------------
 # Top-left logo and title
 logo_url = "https://th.bing.com/th/id/OIP.Vy1yFQtg8-D1SsAxcqqtSgHaE6?w=235&h=180&c=7&r=0&o=7&dpr=1.5&pid=1.7&rm=3"
-st.markdown(f"""
-<div style="display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem;">
-    <img src="{logo_url}" style="height: 45px; width: auto;">
-    <div>
-        <div style="font-size: 1.6rem; font-weight: 600; color: #111827;">ProcureIQ</div>
-        <div style="font-size: 0.85rem; color: #6b7280;">P2P Analytics</div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
 
-# Sidebar navigation
-with st.sidebar:
-    st.markdown("## Dashboards")
-    page = st.radio("Navigation", ["Dashboard", "Genie", "Forecast", "Invoices"], label_visibility="collapsed")
-    st.markdown("---")
-    st.image(logo_url, width=60)
-    st.caption("YASH Technologies\n*More than what you think.*")
+# Header with logo and top navigation
+header_cols = st.columns([1, 4])
+with header_cols[0]:
+    st.image(logo_url, width=50)
+with header_cols[1]:
+    st.markdown("## ProcureIQ")
+    st.caption("P2P Analytics")
+
+# Top navigation bar (no sidebar)
+nav_cols = st.columns(4)
+with nav_cols[0]:
+    if st.button("Dashboard", use_container_width=True):
+        st.session_state.page = "Dashboard"
+        st.rerun()
+with nav_cols[1]:
+    if st.button("Genie", use_container_width=True):
+        st.session_state.page = "Genie"
+        st.rerun()
+with nav_cols[2]:
+    if st.button("Forecast", use_container_width=True):
+        st.session_state.page = "Forecast"
+        st.rerun()
+with nav_cols[3]:
+    if st.button("Invoices", use_container_width=True):
+        st.session_state.page = "Invoices"
+        st.rerun()
+
+st.markdown("---")
+
+# Initialize page state
+if "page" not in st.session_state:
+    st.session_state.page = "Dashboard"
 
 # Router
-if page == "Dashboard":
+if st.session_state.page == "Dashboard":
     render_dashboard()
-elif page == "Genie":
+elif st.session_state.page == "Genie":
     render_genie()
-elif page == "Forecast":
+elif st.session_state.page == "Forecast":
     render_forecast()
-else:  # Invoices
-    status_filter = st.session_state.get("invoice_status_filter", None)
-    render_invoices(initial_status_filter=status_filter)
+else:
+    render_invoices()
