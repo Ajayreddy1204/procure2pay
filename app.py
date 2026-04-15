@@ -228,6 +228,60 @@ def auto_chart(df: pd.DataFrame) -> Union[alt.Chart, None]:
 def render_genie():
     st.subheader("🤖 YashNovaAI – Genie")
     st.markdown("Ask any question about your procurement data in plain English. The AI will generate SQL, run it on Athena, and explain the results.")
+    
+    # Check if we have a pre‑filled prompt from the Forecast page
+    if "genie_prompt" in st.session_state and st.session_state.genie_prompt:
+        prompt = st.session_state.genie_prompt
+        st.session_state.genie_prompt = None  # clear after use
+        # Auto‑submit the prompt
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        with st.chat_message("assistant"):
+            with st.spinner("Generating SQL query..."):
+                sql, explanation = generate_sql(prompt)
+                if not sql:
+                    st.error("Failed to generate SQL. Please rephrase your question.")
+                    st.session_state.messages.append({"role": "assistant", "content": "Sorry, I couldn't generate a valid SQL query."})
+                else:
+                    if not is_safe_sql(sql):
+                        st.error("Generated SQL is not a SELECT statement or contains unsafe keywords.")
+                    else:
+                        sql = ensure_limit(sql)
+                        with st.spinner("Running query on Athena..."):
+                            df = run_query(sql)
+                            if df.empty:
+                                st.warning("The query returned no data.")
+                                st.session_state.messages.append({"role": "assistant", "content": "The query returned no results.", "sql": sql, "df": df})
+                            else:
+                                with st.spinner("Interpreting results..."):
+                                    results_prompt = f"""
+The user asked: "{prompt}"
+We generated and executed this SQL:
+{sql}
+
+The query returned the following data (first 5 rows shown):
+{df.head(5).to_string()}
+
+Please provide a natural language answer to the user's original question based on these results. Be concise, highlight key numbers, and mention any trends or outliers if visible.
+"""
+                                    answer = ask_bedrock(results_prompt, system_prompt="You are a helpful data analyst assistant. Answer concisely based only on the provided data.")
+                                    if not answer:
+                                        answer = "I generated the SQL and ran the query, but I could not interpret the results. Here is the data instead."
+                                st.markdown(answer)
+                                with st.expander("🔍 View SQL"):
+                                    st.code(sql, language="sql")
+                                st.dataframe(df, use_container_width=True)
+                                chart = auto_chart(df)
+                                if chart:
+                                    st.altair_chart(chart, use_container_width=True)
+                                st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
+        # Force a rerun to display the messages properly
+        st.rerun()
+    
+    # Display existing chat messages
     if "messages" not in st.session_state:
         st.session_state.messages = []
     for msg in st.session_state.messages:
@@ -241,6 +295,8 @@ def render_genie():
                 chart = auto_chart(msg["df"])
                 if chart:
                     st.altair_chart(chart, use_container_width=True)
+    
+    # Chat input for new questions
     if prompt := st.chat_input("Ask a question, e.g., 'Show top 5 vendors by spend this year'..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -251,19 +307,19 @@ def render_genie():
                 if not sql:
                     st.error("Failed to generate SQL. Please rephrase your question.")
                     st.session_state.messages.append({"role": "assistant", "content": "Sorry, I couldn't generate a valid SQL query."})
-                    return
-            if not is_safe_sql(sql):
-                st.error("Generated SQL is not a SELECT statement or contains unsafe keywords.")
-                return
-            sql = ensure_limit(sql)
-            with st.spinner("Running query on Athena..."):
-                df = run_query(sql)
-                if df.empty:
-                    st.warning("The query returned no data.")
-                    st.session_state.messages.append({"role": "assistant", "content": "The query returned no results.", "sql": sql, "df": df})
-                    return
-            with st.spinner("Interpreting results..."):
-                results_prompt = f"""
+                else:
+                    if not is_safe_sql(sql):
+                        st.error("Generated SQL is not a SELECT statement or contains unsafe keywords.")
+                    else:
+                        sql = ensure_limit(sql)
+                        with st.spinner("Running query on Athena..."):
+                            df = run_query(sql)
+                            if df.empty:
+                                st.warning("The query returned no data.")
+                                st.session_state.messages.append({"role": "assistant", "content": "The query returned no results.", "sql": sql, "df": df})
+                            else:
+                                with st.spinner("Interpreting results..."):
+                                    results_prompt = f"""
 The user asked: "{prompt}"
 We generated and executed this SQL:
 {sql}
@@ -273,20 +329,23 @@ The query returned the following data (first 5 rows shown):
 
 Please provide a natural language answer to the user's original question based on these results. Be concise, highlight key numbers, and mention any trends or outliers if visible.
 """
-                answer = ask_bedrock(results_prompt, system_prompt="You are a helpful data analyst assistant. Answer concisely based only on the provided data.")
-                if not answer:
-                    answer = "I generated the SQL and ran the query, but I could not interpret the results. Here is the data instead."
-            st.markdown(answer)
-            with st.expander("🔍 View SQL"):
-                st.code(sql, language="sql")
-            st.dataframe(df, use_container_width=True)
-            chart = auto_chart(df)
-            if chart:
-                st.altair_chart(chart, use_container_width=True)
-            st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
+                                    answer = ask_bedrock(results_prompt, system_prompt="You are a helpful data analyst assistant. Answer concisely based only on the provided data.")
+                                    if not answer:
+                                        answer = "I generated the SQL and ran the query, but I could not interpret the results. Here is the data instead."
+                                st.markdown(answer)
+                                with st.expander("🔍 View SQL"):
+                                    st.code(sql, language="sql")
+                                st.dataframe(df, use_container_width=True)
+                                chart = auto_chart(df)
+                                if chart:
+                                    st.altair_chart(chart, use_container_width=True)
+                                st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
+        st.rerun()
 
 def render_forecast():
     st.subheader("Cash Flow Need Forecast")
+    
+    # Query for cash flow data
     cf_sql = """
     WITH base AS (
         SELECT document_number, vendor_id, invoice_amount_local, due_date, invoice_status, days_until_due
@@ -349,31 +408,65 @@ def render_forecast():
     """
     cf_df = run_query(cf_sql)
     if not cf_df.empty:
+        # Extract metrics
         total_unpaid = cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"].empty else 0
         overdue_now = cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"].empty else 0
         due_30 = cf_df[cf_df["forecast_bucket"].isin(["DUE_7_DAYS","DUE_14_DAYS","DUE_30_DAYS"])]["total_amount"].sum()
         pct_due_30 = (due_30 / total_unpaid * 100) if total_unpaid > 0 else 0
-        col1, col2, col3 = st.columns(3)
+        
+        # Display KPI metrics in 4 columns
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("TOTAL UNPAID", abbr_currency(total_unpaid))
         col2.metric("OVERDUE NOW", abbr_currency(overdue_now))
         col3.metric("DUE NEXT 30 DAYS", abbr_currency(due_30))
-        st.metric("% DUE ≤ 30 DAYS", f"{pct_due_30:.1f}%")
+        col4.metric("% DUE ≤ 30 DAYS", f"{pct_due_30:.1f}%")
+        
+        st.markdown("---")
+        st.subheader("Obligations by time bucket")
         st.dataframe(cf_df, use_container_width=True)
+        
+        # Download button
+        csv = cf_df.to_csv(index=False).encode('utf-8')
+        st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
+        
+        # Bar chart (optional, but can be kept)
         chart_df = cf_df[~cf_df["forecast_bucket"].isin(["TOTAL_UNPAID", "PROCESSING_LAG_DAYS"])].copy()
         if not chart_df.empty:
+            st.markdown("---")
+            st.subheader("Forecast Distribution")
             chart = alt.Chart(chart_df).mark_bar(color="#10b981").encode(
                 x=alt.X("forecast_bucket:N", sort=None, axis=alt.Axis(title=None, labelAngle=-30)),
                 y=alt.Y("total_amount:Q", axis=alt.Axis(title="Amount", format="~s")),
                 tooltip=["forecast_bucket", "total_amount"]
             ).properties(height=300)
             st.altair_chart(chart, use_container_width=True)
-        csv = cf_df.to_csv(index=False).encode('utf-8')
-        st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
     else:
         st.info("No cash flow forecast data")
-
+    
     st.markdown("---")
-    st.subheader("GR/IR Outstanding Balance (Latest Month)")
+    st.subheader("Action Playbook")
+    st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late. Each button opens Genie with a pre‑built question wired to the right verified queries.")
+    
+    # Define action buttons and their questions
+    actions = [
+        ("📊 Forecast cash outflow (7–90 days)", "Forecast cash outflow for the next 7 to 90 days, showing expected payment amounts by week."),
+        ("💰 Invoices to pay early to capture discounts", "List invoices that offer early payment discounts, sorted by discount amount and due date."),
+        ("⏰ Optimal payment timing for this week", "Recommend optimal payment timing for this week based on due dates and discount terms."),
+        ("⚠️ Late payment trend and risk", "Analyze late payment trends over the last 6 months and identify high‑risk vendors.")
+    ]
+    
+    cols = st.columns(2)  # two buttons per row
+    for idx, (label, question) in enumerate(actions):
+        with cols[idx % 2]:
+            if st.button(label, use_container_width=True):
+                # Set session state to switch to Genie and pre‑fill the prompt
+                st.session_state.page = "Genie"
+                st.session_state.genie_prompt = question
+                st.rerun()
+    
+    st.markdown("---")
+    st.subheader("GR/IR Reconciliation")
+    # GR/IR summary (latest month)
     grir_summary_sql = """
     WITH latest AS (
         SELECT year, month, invoice_count, total_grir_blnc
@@ -591,10 +684,9 @@ def render_dashboard():
     if "date_range" not in st.session_state:
         st.session_state.date_range = compute_range_preset(st.session_state.preset)
 
-    # --- Filters row (third line) ---
+    # Filters row
     col_date, col_vendor, col_preset = st.columns([2, 2, 3])
     with col_date:
-        # When the date picker changes, reset preset to "Custom"
         date_range = st.date_input(
             "Date Range",
             value=st.session_state.date_range,
@@ -606,7 +698,6 @@ def render_dashboard():
             new_start, new_end = date_range
         else:
             new_start, new_end = st.session_state.date_range
-        # If the date range was manually changed (not by preset), set preset to "Custom"
         if (new_start, new_end) != st.session_state.date_range:
             st.session_state.date_range = (new_start, new_end)
             st.session_state.preset = "Custom"
@@ -631,7 +722,6 @@ def render_dashboard():
         for p in presets:
             if st.button(p, key=f"preset_{p}", use_container_width=True, type="primary" if p == current_preset else "secondary"):
                 if p == "Custom":
-                    # Keep existing date range
                     st.session_state.preset = p
                 else:
                     new_start, new_end = compute_range_preset(p)
@@ -732,7 +822,7 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
-    # Display KPI cards (two rows of 4)
+    # Display KPI cards
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
@@ -755,7 +845,7 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # --- Needs Attention Section (Paginated Grid: 2 rows × 5 columns) ---
+    # --- Needs Attention Section (Paginated Grid) ---
     st.subheader("Needs Attention")
 
     attention_sql = f"""
@@ -864,7 +954,7 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # ---------------------------- Charts Section ----------------------------
+    # Charts section
     st.subheader("Analytics")
 
     # 1. Invoice Status Pie Chart
@@ -957,7 +1047,7 @@ def render_dashboard():
     else:
         st.info("No trend data")
 
-# ---------------------------- Main App Layout with new header ----------------------------
+# ---------------------------- Main App Layout ----------------------------
 logo_url = "https://th.bing.com/th/id/OIP.Vy1yFQtg8-D1SsAxcqqtSgHaE6?w=235&h=180&c=7&r=0&o=7&dpr=1.5&pid=1.7&rm=3"
 
 # First line: procure2pay (bold), nav buttons, logo on right
