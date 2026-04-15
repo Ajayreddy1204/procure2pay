@@ -559,7 +559,6 @@ def render_invoices(initial_invoice_number=None):
 def load_custom_css():
     st.markdown("""
     <style>
-    /* Make buttons inside attention cards look like part of the card */
     div[data-testid="column"] button {
         background-color: transparent;
         border: none;
@@ -576,24 +575,9 @@ def load_custom_css():
         background-color: rgba(0,0,0,0.05);
         border: none;
     }
-    /* Remove extra spacing around the button container */
     div[data-testid="column"] > div:has(button) {
         margin-top: 0;
         padding-top: 0;
-    }
-    /* Adjust top bar layout */
-    .top-bar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 0.5rem;
-    }
-    .nav-buttons {
-        display: flex;
-        gap: 0.5rem;
-    }
-    .logo-right {
-        margin-left: auto;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -610,24 +594,30 @@ def render_dashboard():
     # --- Filters row (third line) ---
     col_date, col_vendor, col_preset = st.columns([2, 2, 3])
     with col_date:
+        # When the date picker changes, reset preset to "Custom"
         date_range = st.date_input(
             "Date Range",
             value=st.session_state.date_range,
             format="YYYY-MM-DD",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="date_picker"
         )
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-            rng_start, rng_end = date_range
+            new_start, new_end = date_range
         else:
-            rng_start, rng_end = st.session_state.date_range
-        st.session_state.date_range = (rng_start, rng_end)
+            new_start, new_end = st.session_state.date_range
+        # If the date range was manually changed (not by preset), set preset to "Custom"
+        if (new_start, new_end) != st.session_state.date_range:
+            st.session_state.date_range = (new_start, new_end)
+            st.session_state.preset = "Custom"
+            st.rerun()
 
     with col_vendor:
         vendor_sql = f"""
         SELECT DISTINCT v.vendor_name
         FROM {DATABASE}.fact_all_sources_vw f
         LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-        WHERE f.posting_date BETWEEN {sql_date(rng_start)} AND {sql_date(rng_end)}
+        WHERE f.posting_date BETWEEN {sql_date(st.session_state.date_range[0])} AND {sql_date(st.session_state.date_range[1])}
           AND v.vendor_name IS NOT NULL
         ORDER BY 1
         """
@@ -641,6 +631,7 @@ def render_dashboard():
         for p in presets:
             if st.button(p, key=f"preset_{p}", use_container_width=True, type="primary" if p == current_preset else "secondary"):
                 if p == "Custom":
+                    # Keep existing date range
                     st.session_state.preset = p
                 else:
                     new_start, new_end = compute_range_preset(p)
@@ -648,9 +639,9 @@ def render_dashboard():
                     st.session_state.preset = p
                 st.rerun()
 
-    start_lit = sql_date(rng_start)
-    end_lit = sql_date(rng_end)
-    p_start, p_end = prior_window(rng_start, rng_end)
+    start_lit = sql_date(st.session_state.date_range[0])
+    end_lit = sql_date(st.session_state.date_range[1])
+    p_start, p_end = prior_window(st.session_state.date_range[0], st.session_state.date_range[1])
     p_start_lit = sql_date(p_start)
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
@@ -974,7 +965,6 @@ col_title, col_nav, col_logo = st.columns([1, 3, 1])
 with col_title:
     st.markdown("<h1 style='font-weight: bold; margin-bottom: 0;'>procure2pay</h1>", unsafe_allow_html=True)
 with col_nav:
-    # Navigation buttons
     nav_cols = st.columns(4)
     with nav_cols[0]:
         if st.button("Dashboard", use_container_width=True):
