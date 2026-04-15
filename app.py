@@ -92,15 +92,16 @@ def build_vendor_where(selected_vendor: str) -> str:
     return f"AND UPPER(v.vendor_name) = UPPER('{safe_vendor}')"
 
 def pct_delta(cur, prev):
+    """Return (delta_string, is_positive) where delta_string includes arrow and sign."""
     if prev == 0:
         if cur == 0:
-            return "0%", True, True
-        return "+100%", True, False
+            return "0%", True
+        return "↑ +100%", True
     change = (cur - prev) / prev * 100
     if abs(change) < 0.05:
-        return "0%", True, True
-    sign = "+" if change >= 0 else "−"
-    return f"{sign}{abs(change):.1f}%", change >= 0, False
+        return "0%", True
+    sign = "↑" if change >= 0 else "↓"
+    return f"{sign} {change:+.1f}%".replace("+", "+"), change >= 0
 
 # ---------------------------- AI Chat Functions (unchanged) ----------------------------
 SYSTEM_PROMPT = """
@@ -653,23 +654,16 @@ def render_dashboard():
     prev_active_vendors = safe_int(prev_df.loc[0, "active_vendors"]) if not prev_df.empty else 0
     prev_pending = safe_int(prev_df.loc[0, "pending_inv"]) if not prev_df.empty else 0
 
-    # Calculate deltas and format delta strings with explicit arrows and colors (handled by st.metric)
-    def format_delta(cur, prev):
-        if prev == 0:
-            if cur == 0:
-                return "0%"
-            return "↑ +100%"
-        change = (cur - prev) / prev * 100
-        if abs(change) < 0.05:
-            return "0%"
-        sign = "↑" if change >= 0 else "↓"
-        return f"{sign} {change:+.1f}%".replace("+", "+")  # e.g., "↓ -59.7%" or "↑ +100.0%"
+    # Compute delta strings
+    spend_delta, _ = pct_delta(cur_spend, prev_spend)
+    active_pos_delta, _ = pct_delta(cur_active_pos, prev_active_pos)
+    total_pos_delta, _ = pct_delta(cur_total_pos, prev_total_pos)
+    active_vendors_delta, _ = pct_delta(cur_active_vendors, prev_active_vendors)
+    pending_delta, _ = pct_delta(cur_pending, prev_pending)
 
-    spend_delta = format_delta(cur_spend, prev_spend)
-    active_pos_delta = format_delta(cur_active_pos, prev_active_pos)
-    total_pos_delta = format_delta(cur_total_pos, prev_total_pos)
-    active_vendors_delta = format_delta(cur_active_vendors, prev_active_vendors)
-    pending_delta = format_delta(cur_pending, prev_pending)
+    # For avg processing time, we compute a simple day delta (not percentage)
+    prev_avg_processing = 0  # we don't have previous avg easily; could compute but skip for simplicity
+    avg_delta = ""  # or compute if needed
 
     # First pass and auto-processed rates (no deltas needed)
     first_pass_sql = f"""
@@ -815,18 +809,20 @@ def render_dashboard():
                         border_color = "#3b82f6"
                         bg_color = "#dbeafe"
                     with col:
-                        st.markdown(f"""
-                        <div style="border: 1px solid {border_color}; border-radius: 12px; padding: 0.75rem; background-color: {bg_color}; margin-bottom: 0.5rem;">
-                            <div style="font-weight: bold;">{vendor}</div>
-                            <div style="font-size: 0.8rem; color: {border_color};">{att_type}</div>
-                            <div style="font-size: 1.2rem; font-weight: 600;">{abbr_currency(amount)}</div>
-                            <div style="font-size: 0.7rem;">Due: {due_date}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        # Invoice number as a clickable button
                         if st.button(f"📄 {inv_num}", key=f"att_{inv_num}_{start_idx+col_idx}", use_container_width=True):
                             st.session_state.page = "Invoices"
                             st.session_state.invoice_search_term = str(inv_num)
                             st.rerun()
+                        # Card content
+                        st.markdown(f"""
+                        <div style="border: 1px solid {border_color}; border-radius: 12px; padding: 0.5rem; background-color: {bg_color}; margin-top: 0.25rem;">
+                            <div style="font-weight: bold;">{vendor}</div>
+                            <div style="font-size: 0.8rem; color: {border_color};">{att_type}</div>
+                            <div style="font-size: 1.1rem; font-weight: 600;">{abbr_currency(amount)}</div>
+                            <div style="font-size: 0.7rem;">Due: {due_date}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
 
         # Pagination controls
         col_prev, col_page_info, col_next = st.columns([1, 2, 1])
