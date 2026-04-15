@@ -719,10 +719,10 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # --- Needs Attention Section (Horizontal Grid: 2 rows x 5 columns) ---
+    # --- Needs Attention Section (Paginated Grid: 2 rows × 5 columns) ---
     st.subheader("Needs Attention")
 
-    # Fetch attention data (overdue, disputed, due next 30 days) – limit to 10 most urgent
+    # Fetch all attention data (no LIMIT)
     attention_sql = f"""
     SELECT
         f.invoice_number,
@@ -745,7 +745,6 @@ def render_dashboard():
           OR (f.due_date >= CURRENT_DATE AND f.due_date <= DATE_ADD('day', 30, CURRENT_DATE) AND UPPER(f.invoice_status) = 'OPEN')
       )
     ORDER BY f.due_date ASC
-    LIMIT 10
     """
     attention_df = run_query(attention_sql)
     if not attention_df.empty:
@@ -755,25 +754,36 @@ def render_dashboard():
             if st.button(f"⚠️ Overdue ({len(attention_df[attention_df['attention_type']=='Overdue'])})", use_container_width=True):
                 st.session_state.page = "Invoices"
                 st.session_state.invoice_status_filter = "OVERDUE"
+                st.session_state.attention_page = 0  # reset pagination
                 st.rerun()
         with col_type2:
             if st.button(f"⚖️ Disputed ({len(attention_df[attention_df['attention_type']=='Disputed'])})", use_container_width=True):
                 st.session_state.page = "Invoices"
                 st.session_state.invoice_status_filter = "DISPUTED"
+                st.session_state.attention_page = 0
                 st.rerun()
         with col_type3:
             if st.button(f"📅 Due Next 30 Days ({len(attention_df[attention_df['attention_type']=='Due Next 30 Days'])})", use_container_width=True):
                 st.session_state.page = "Invoices"
                 st.session_state.invoice_status_filter = "DUE_NEXT_30"
+                st.session_state.attention_page = 0
                 st.rerun()
 
         st.markdown("---")
-        # Display in 2 rows, 5 columns
-        # Convert dataframe to list of rows
-        rows = attention_df.to_dict('records')
-        # Ensure we have at most 10 items
-        rows = rows[:10]
-        # Create rows of 5
+
+        # Pagination settings
+        items_per_page = 10  # 2 rows * 5 columns
+        total_items = len(attention_df)
+        if "attention_page" not in st.session_state:
+            st.session_state.attention_page = 0
+        total_pages = (total_items - 1) // items_per_page + 1 if total_items > 0 else 1
+        start_idx = st.session_state.attention_page * items_per_page
+        end_idx = min(start_idx + items_per_page, total_items)
+        page_df = attention_df.iloc[start_idx:end_idx]
+
+        # Convert to list of rows
+        rows = page_df.to_dict('records')
+        # Display in 2 rows of 5 columns
         for i in range(0, len(rows), 5):
             cols = st.columns(5)
             for col_idx, col in enumerate(cols):
@@ -794,7 +804,6 @@ def render_dashboard():
                     else:
                         border_color = "#3b82f6"
                         bg_color = "#dbeafe"
-                    # Render a card inside the column
                     with col:
                         st.markdown(f"""
                         <div style="border: 1px solid {border_color}; border-radius: 12px; padding: 0.75rem; background-color: {bg_color}; margin-bottom: 0.5rem;">
@@ -804,11 +813,23 @@ def render_dashboard():
                             <div style="font-size: 0.7rem;">Due: {due_date}</div>
                         </div>
                         """, unsafe_allow_html=True)
-                        # Clickable invoice number button
-                        if st.button(f"📄 {inv_num}", key=f"att_{inv_num}", use_container_width=True):
+                        if st.button(f"📄 {inv_num}", key=f"att_{inv_num}_{start_idx+col_idx}", use_container_width=True):
                             st.session_state.page = "Invoices"
                             st.session_state.invoice_search_term = str(inv_num)
                             st.rerun()
+
+        # Pagination controls
+        col_prev, col_page_info, col_next = st.columns([1, 2, 1])
+        with col_prev:
+            if st.button("← Prev", disabled=(st.session_state.attention_page == 0)):
+                st.session_state.attention_page -= 1
+                st.rerun()
+        with col_page_info:
+            st.markdown(f"<div style='text-align: center;'>Page {st.session_state.attention_page + 1} of {total_pages}</div>", unsafe_allow_html=True)
+        with col_next:
+            if st.button("Next →", disabled=(st.session_state.attention_page >= total_pages - 1)):
+                st.session_state.attention_page += 1
+                st.rerun()
     else:
         st.info("No attention items found for the selected period.")
 
@@ -835,7 +856,6 @@ def render_dashboard():
     if not status_df.empty:
         total = status_df['cnt'].sum()
         status_df['percentage'] = (status_df['cnt'] / total * 100).round(1)
-        # Create pie chart
         pie = alt.Chart(status_df).mark_arc(innerRadius=40).encode(
             theta=alt.Theta(field="cnt", type="quantitative"),
             color=alt.Color(field="status", type="nominal", scale=alt.Scale(scheme="pastel1")),
