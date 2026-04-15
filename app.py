@@ -556,7 +556,38 @@ def render_invoices(initial_invoice_number=None):
     else:
         st.info("No invoices found.")
 
+# ---------------------------- Custom CSS for card buttons ----------------------------
+def load_custom_css():
+    st.markdown("""
+    <style>
+    /* Make buttons inside attention cards look like part of the card */
+    div[data-testid="column"] button {
+        background-color: transparent;
+        border: none;
+        box-shadow: none;
+        padding: 0.25rem 0.5rem;
+        margin: 0;
+        font-weight: bold;
+        width: 100%;
+        text-align: center;
+        border-radius: 8px;
+        transition: background-color 0.2s;
+    }
+    div[data-testid="column"] button:hover {
+        background-color: rgba(0,0,0,0.05);
+        border: none;
+    }
+    /* Remove extra spacing around the button container */
+    div[data-testid="column"] > div:has(button) {
+        margin-top: 0;
+        padding-top: 0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 def render_dashboard():
+    load_custom_css()  # apply custom button styling
+
     # Date range state
     if "preset" not in st.session_state:
         st.session_state.preset = "Last 30 Days"
@@ -661,11 +692,7 @@ def render_dashboard():
     active_vendors_delta, _ = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, _ = pct_delta(cur_pending, prev_pending)
 
-    # For avg processing time, we compute a simple day delta (not percentage)
-    prev_avg_processing = 0  # we don't have previous avg easily; could compute but skip for simplicity
-    avg_delta = ""  # or compute if needed
-
-    # First pass and auto-processed rates (no deltas needed)
+    # First pass and auto-processed rates
     first_pass_sql = f"""
     WITH hist AS (
         SELECT invoice_number,
@@ -702,7 +729,7 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
-    # Display KPI cards (two rows of 4)
+    # Display KPI cards (two rows of 4) with colored deltas
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
@@ -728,7 +755,7 @@ def render_dashboard():
     # --- Needs Attention Section (Paginated Grid: 2 rows × 5 columns) ---
     st.subheader("Needs Attention")
 
-    # Fetch all attention data (no LIMIT)
+    # Fetch all attention data
     attention_sql = f"""
     SELECT
         f.invoice_number,
@@ -754,7 +781,7 @@ def render_dashboard():
     """
     attention_df = run_query(attention_sql)
     if not attention_df.empty:
-        # Buttons to filter by type (navigate to Invoices)
+        # Filter buttons
         col_type1, col_type2, col_type3 = st.columns(3)
         with col_type1:
             if st.button(f"⚠️ Overdue ({len(attention_df[attention_df['attention_type']=='Overdue'])})", use_container_width=True):
@@ -777,8 +804,8 @@ def render_dashboard():
 
         st.markdown("---")
 
-        # Pagination settings
-        items_per_page = 10  # 2 rows * 5 columns
+        # Pagination
+        items_per_page = 10
         total_items = len(attention_df)
         if "attention_page" not in st.session_state:
             st.session_state.attention_page = 0
@@ -809,20 +836,20 @@ def render_dashboard():
                         border_color = "#3b82f6"
                         bg_color = "#dbeafe"
                     with col:
-                        # Invoice number as a clickable button
-                        if st.button(f"📄 {inv_num}", key=f"att_{inv_num}_{start_idx+col_idx}", use_container_width=True):
+                        # Card container with border and background
+                        st.markdown(f"""
+                        <div style="border: 1px solid {border_color}; border-radius: 12px; padding: 0.5rem; background-color: {bg_color}; margin-bottom: 0.5rem;">
+                            <div style="font-weight: bold; margin-bottom: 0.25rem;">{vendor}</div>
+                            <div style="font-size: 0.8rem; color: {border_color}; margin-bottom: 0.25rem;">{att_type}</div>
+                            <div style="font-size: 1.1rem; font-weight: 600; margin-bottom: 0.25rem;">{abbr_currency(amount)}</div>
+                            <div style="font-size: 0.7rem; margin-bottom: 0.5rem;">Due: {due_date}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        # Invoice number button (placed inside the same column, directly after the card)
+                        if st.button(f"📄 Invoice {inv_num}", key=f"att_{inv_num}_{start_idx+col_idx}", use_container_width=True):
                             st.session_state.page = "Invoices"
                             st.session_state.invoice_search_term = str(inv_num)
                             st.rerun()
-                        # Card content
-                        st.markdown(f"""
-                        <div style="border: 1px solid {border_color}; border-radius: 12px; padding: 0.5rem; background-color: {bg_color}; margin-top: 0.25rem;">
-                            <div style="font-weight: bold;">{vendor}</div>
-                            <div style="font-size: 0.8rem; color: {border_color};">{att_type}</div>
-                            <div style="font-size: 1.1rem; font-weight: 600;">{abbr_currency(amount)}</div>
-                            <div style="font-size: 0.7rem;">Due: {due_date}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
 
         # Pagination controls
         col_prev, col_page_info, col_next = st.columns([1, 2, 1])
