@@ -30,6 +30,7 @@ def run_query(sql: str) -> pd.DataFrame:
     """Execute SQL on Athena and return DataFrame with Decimal->float conversion."""
     try:
         df = wr.athena.read_sql_query(sql, database=DATABASE, boto3_session=session)
+        # Convert Decimal columns to float to avoid Altair warnings
         for col in df.columns:
             if df[col].dtype == object and df[col].apply(lambda x: isinstance(x, Decimal)).any():
                 df[col] = df[col].astype(float)
@@ -103,7 +104,7 @@ def pct_delta(cur, prev):
     sign = "+" if change >= 0 else "−"
     return f"{sign}{abs(change):.1f}%", change >= 0, False
 
-# ---------------------------- AI Chat Functions (unchanged) ----------------------------
+# ---------------------------- AI Chat Functions (Bedrock) ----------------------------
 SYSTEM_PROMPT = """
 You are an AI assistant that helps users query a procurement database using SQL (Athena/Presto). Given a user's natural language question, generate a valid SQL query for Athena (Presto dialect) based on the following schema.
 
@@ -138,6 +139,7 @@ Important notes:
 """
 
 def ask_bedrock(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
+    """Invoke Amazon Nova Micro with correct system prompt format (array)."""
     try:
         body = json.dumps({
             "messages": [
@@ -225,6 +227,7 @@ def auto_chart(df: pd.DataFrame) -> Union[alt.Chart, None]:
         return chart.interactive()
     return None
 
+# ---------------------------- Page Renderers ----------------------------
 def render_genie():
     st.subheader("🤖 YashNovaAI – Genie")
     st.markdown("Ask any question about your procurement data in plain English. The AI will generate SQL, run it on Athena, and explain the results.")
@@ -285,271 +288,6 @@ Please provide a natural language answer to the user's original question based o
                 st.altair_chart(chart, use_container_width=True)
             st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
 
-# ---------------------------- Custom CSS for modern look ----------------------------
-def load_css():
-    st.markdown("""
-    <style>
-    .stApp { background-color: #f7f8fb; }
-    .block-container { padding-top: 1rem; max-width: 1400px; }
-    .kpi-card {
-        background: white;
-        border-radius: 16px;
-        padding: 1rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        border: 1px solid #e5e7eb;
-        text-align: center;
-    }
-    .kpi-title { font-size: 0.85rem; font-weight: 600; color: #6b7280; letter-spacing: 0.05em; }
-    .kpi-value { font-size: 1.8rem; font-weight: 700; color: #111827; margin: 0.25rem 0; }
-    .delta-up { color: #10b981; font-size: 0.8rem; }
-    .delta-down { color: #ef4444; font-size: 0.8rem; }
-    .attention-card {
-        background: white;
-        border-radius: 16px;
-        padding: 0.75rem;
-        border-left: 4px solid;
-        margin-bottom: 0.5rem;
-    }
-    .sidebar-logo {
-        display: flex;
-        justify-content: center;
-        margin-bottom: 1rem;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-load_css()
-
-# ---------------------------- Sidebar with Logo & Navigation ----------------------------
-with st.sidebar:
-    st.markdown('<div class="sidebar-logo">', unsafe_allow_html=True)
-    st.image("https://th.bing.com/th/id/OIP.Vy1yFQtg8-D1SsAxcqqtSgHaE6?w=235&h=180&c=7&r=0&o=7&dpr=1.5&pid=1.7&rm=3", width=80)
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown("## ProcureIQ")
-    st.markdown("P2P Analytics")
-    st.markdown("---")
-    page = st.radio(
-        "Navigation",
-        ["Dashboard", "Genie", "Forecast", "Invoices"],
-        label_visibility="collapsed"
-    )
-    st.markdown("---")
-    st.caption("© 2026 Yash Technologies")
-
-# ---------------------------- Dashboard Page (redesigned) ----------------------------
-def render_dashboard():
-    # Date and vendor filters (preserve existing logic)
-    if "preset" not in st.session_state:
-        st.session_state.preset = "Last 30 Days"
-    if "date_range" not in st.session_state:
-        st.session_state.date_range = compute_range_preset(st.session_state.preset)
-
-    col_date, col_vendor, col_preset = st.columns([2, 2, 3])
-    with col_date:
-        date_range = st.date_input(
-            "Date Range",
-            value=st.session_state.date_range,
-            format="YYYY-MM-DD",
-            label_visibility="collapsed"
-        )
-        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-            rng_start, rng_end = date_range
-        else:
-            rng_start, rng_end = st.session_state.date_range
-        st.session_state.date_range = (rng_start, rng_end)
-
-    with col_vendor:
-        vendor_sql = f"""
-        SELECT DISTINCT v.vendor_name
-        FROM {DATABASE}.fact_all_sources_vw f
-        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-        WHERE f.posting_date BETWEEN {sql_date(rng_start)} AND {sql_date(rng_end)}
-          AND v.vendor_name IS NOT NULL
-        ORDER BY 1
-        """
-        vendors_df = run_query(vendor_sql)
-        vendor_list = ["All Vendors"] + vendors_df["vendor_name"].tolist() if not vendors_df.empty else ["All Vendors"]
-        selected_vendor = st.selectbox("Vendor", vendor_list, index=0, label_visibility="collapsed")
-
-    with col_preset:
-        presets = ["Last 30 Days", "QTD", "YTD", "Custom"]
-        current_preset = st.session_state.preset
-        for p in presets:
-            if st.button(p, key=f"preset_{p}", use_container_width=True, type="primary" if p == current_preset else "secondary"):
-                if p == "Custom":
-                    st.session_state.preset = p
-                else:
-                    new_start, new_end = compute_range_preset(p)
-                    st.session_state.date_range = (new_start, new_end)
-                    st.session_state.preset = p
-                st.rerun()
-
-    start_lit = sql_date(rng_start)
-    end_lit = sql_date(rng_end)
-    p_start, p_end = prior_window(rng_start, rng_end)
-    p_start_lit = sql_date(p_start)
-    p_end_lit = sql_date(p_end)
-    vendor_where = build_vendor_where(selected_vendor)
-
-    # --- KPI Queries ---
-    cur_kpi_sql = f"""
-    SELECT
-        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
-        SUM(CASE WHEN UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
-                 THEN COALESCE(invoice_amount_local, 0) ELSE 0 END) AS total_spend,
-        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN invoice_number END) AS pending_inv,
-        AVG(DATE_DIFF('day', posting_date, payment_date)) AS avg_processing_days
-    FROM {DATABASE}.fact_all_sources_vw f
-    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
-    {vendor_where}
-      AND UPPER(invoice_status) = 'PAID'  -- for avg processing days
-    """
-    cur_df = run_query(cur_kpi_sql)
-    cur_spend = safe_number(cur_df.loc[0, "total_spend"]) if not cur_df.empty else 0
-    cur_pos = safe_int(cur_df.loc[0, "active_pos"]) if not cur_df.empty else 0
-    cur_pend = safe_int(cur_df.loc[0, "pending_inv"]) if not cur_df.empty else 0
-    cur_avg_days = safe_number(cur_df.loc[0, "avg_processing_days"]) if not cur_df.empty else 0
-
-    # Previous period for deltas
-    prev_kpi_sql = f"""
-    SELECT
-        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
-        SUM(CASE WHEN UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
-                 THEN COALESCE(invoice_amount_local, 0) ELSE 0 END) AS total_spend,
-        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN invoice_number END) AS pending_inv
-    FROM {DATABASE}.fact_all_sources_vw f
-    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-    WHERE f.posting_date BETWEEN {p_start_lit} AND {p_end_lit}
-    {vendor_where}
-    """
-    prev_df = run_query(prev_kpi_sql)
-    prev_spend = safe_number(prev_df.loc[0, "total_spend"]) if not prev_df.empty else 0
-    prev_pos = safe_int(prev_df.loc[0, "active_pos"]) if not prev_df.empty else 0
-    prev_pend = safe_int(prev_df.loc[0, "pending_inv"]) if not prev_df.empty else 0
-
-    spend_delta, spend_up, _ = pct_delta(cur_spend, prev_spend)
-    pos_delta, pos_up, _ = pct_delta(cur_pos, prev_pos)
-    pend_delta, pend_up, _ = pct_delta(cur_pend, prev_pend)
-
-    # Display KPI cards
-    kpi_cols = st.columns(4)
-    kpis = [
-        ("TOTAL SPEND", abbr_currency(cur_spend), spend_delta, spend_up),
-        ("ACTIVE PO'S", f"{cur_pos:,}", pos_delta, pos_up),
-        ("AVG INVOICE PROCESSING TIME", f"{cur_avg_days:.1f}d", "↓ -", False),  # static
-        ("PENDING INVOICES", f"{cur_pend:,}", pend_delta, pend_up),
-    ]
-    for col, (label, value, delta, is_up) in zip(kpi_cols, kpis):
-        with col:
-            delta_class = "delta-up" if is_up else "delta-down"
-            delta_sign = "↑" if is_up else "↓"
-            st.markdown(f"""
-            <div class="kpi-card">
-                <div class="kpi-title">{label}</div>
-                <div class="kpi-value">{value}</div>
-                <div class="{delta_class}">{delta_sign} {delta}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    # --- Needs Attention (Overdue, Disputed, Due) ---
-    st.markdown("---")
-    st.subheader("Needs Attention")
-
-    # Count queries for attention categories
-    overdue_sql = f"""
-    SELECT COUNT(*) AS cnt
-    FROM {DATABASE}.fact_all_sources_vw f
-    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
-      {vendor_where.replace('AND', 'AND') if vendor_where else ''}
-      AND f.due_date < CURRENT_DATE
-      AND UPPER(f.invoice_status) IN ('OVERDUE')
-    """
-    disputed_sql = f"""
-    SELECT COUNT(*) AS cnt
-    FROM {DATABASE}.fact_all_sources_vw f
-    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
-      {vendor_where.replace('AND', 'AND') if vendor_where else ''}
-      AND UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED')
-    """
-    due_sql = f"""
-    SELECT COUNT(*) AS cnt
-    FROM {DATABASE}.fact_all_sources_vw f
-    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
-      {vendor_where.replace('AND', 'AND') if vendor_where else ''}
-      AND f.due_date >= CURRENT_DATE
-      AND f.due_date <= DATE_ADD('day', 30, CURRENT_DATE)
-      AND UPPER(f.invoice_status) IN ('OPEN')
-    """
-    overdue_cnt = safe_int(run_query(overdue_sql).loc[0, "cnt"]) if not run_query(overdue_sql).empty else 0
-    disputed_cnt = safe_int(run_query(disputed_sql).loc[0, "cnt"]) if not run_query(disputed_sql).empty else 0
-    due_cnt = safe_int(run_query(due_sql).loc[0, "cnt"]) if not run_query(due_sql).empty else 0
-
-    total_attention = overdue_cnt + disputed_cnt + due_cnt
-    st.markdown(f"**{total_attention} items need attention**")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown(f"""
-        <div class="attention-card" style="border-left-color: #ef4444;">
-            <strong>⚠️ Overdue</strong><br>
-            <span style="font-size: 1.5rem; font-weight: 600;">{overdue_cnt}</span>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown(f"""
-        <div class="attention-card" style="border-left-color: #f59e0b;">
-            <strong>⚖️ Disputed</strong><br>
-            <span style="font-size: 1.5rem; font-weight: 600;">{disputed_cnt}</span>
-        </div>
-        """, unsafe_allow_html=True)
-    with col3:
-        st.markdown(f"""
-        <div class="attention-card" style="border-left-color: #3b82f6;">
-            <strong>📅 Due Next 30 Days</strong><br>
-            <span style="font-size: 1.5rem; font-weight: 600;">{due_cnt}</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Optional: simple ring chart for attention distribution
-    if total_attention > 0:
-        attention_df = pd.DataFrame({
-            "category": ["Overdue", "Disputed", "Due Next 30 Days"],
-            "count": [overdue_cnt, disputed_cnt, due_cnt]
-        })
-        chart = alt.Chart(attention_df).mark_arc(innerRadius=50).encode(
-            theta="count",
-            color=alt.Color("category", scale=alt.Scale(domain=["Overdue", "Disputed", "Due Next 30 Days"], range=["#ef4444", "#f59e0b", "#3b82f6"])),
-            tooltip=["category", "count"]
-        ).properties(height=200, width=200)
-        st.altair_chart(chart, use_container_width=False)
-
-    # Optional: recent invoices table (compact)
-    st.markdown("---")
-    st.subheader("Recent Invoices")
-    recent_sql = f"""
-    SELECT DISTINCT
-        f.invoice_number AS "INVOICE NUMBER",
-        v.vendor_name AS "VENDOR NAME",
-        f.posting_date AS "POSTING DATE",
-        f.due_date AS "DUE DATE",
-        f.invoice_amount_local AS "INVOICE AMOUNT",
-        f.purchase_order_reference AS "PO NUMBER",
-        UPPER(f.invoice_status) AS "STATUS"
-    FROM {DATABASE}.fact_all_sources_vw f
-    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
-    {vendor_where}
-    ORDER BY f.posting_date DESC
-    LIMIT 10
-    """
-    recent_df = run_query(recent_sql)
-    if not recent_df.empty:
-        st.dataframe(recent_df, use_container_width=True)
-    else:
-        st.info("No invoices found for the selected period.")
-
-# ---------------------------- Forecast Page (Cash Flow) ----------------------------
 def render_forecast():
     st.subheader("Cash Flow Need Forecast")
     cf_sql = """
@@ -614,18 +352,16 @@ def render_forecast():
     """
     cf_df = run_query(cf_sql)
     if not cf_df.empty:
-        # Show summary metrics
         total_unpaid = cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"].empty else 0
         overdue_now = cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"].empty else 0
         due_30 = cf_df[cf_df["forecast_bucket"].isin(["DUE_7_DAYS","DUE_14_DAYS","DUE_30_DAYS"])]["total_amount"].sum()
         pct_due_30 = (due_30 / total_unpaid * 100) if total_unpaid > 0 else 0
-        st.metric("TOTAL UNPAID", abbr_currency(total_unpaid))
         col1, col2, col3 = st.columns(3)
-        col1.metric("OVERDUE NOW", abbr_currency(overdue_now))
-        col2.metric("DUE NEXT 30 DAYS", abbr_currency(due_30))
-        col3.metric("% DUE ≤ 30 DAYS", f"{pct_due_30:.1f}%")
+        col1.metric("TOTAL UNPAID", abbr_currency(total_unpaid))
+        col2.metric("OVERDUE NOW", abbr_currency(overdue_now))
+        col3.metric("DUE NEXT 30 DAYS", abbr_currency(due_30))
+        st.metric("% DUE ≤ 30 DAYS", f"{pct_due_30:.1f}%")
         st.dataframe(cf_df, use_container_width=True)
-        # Bar chart for buckets (excluding TOTAL_UNPAID and PROCESSING_LAG_DAYS)
         chart_df = cf_df[~cf_df["forecast_bucket"].isin(["TOTAL_UNPAID", "PROCESSING_LAG_DAYS"])].copy()
         if not chart_df.empty:
             chart = alt.Chart(chart_df).mark_bar(color="#10b981").encode(
@@ -634,13 +370,11 @@ def render_forecast():
                 tooltip=["forecast_bucket", "total_amount"]
             ).properties(height=300)
             st.altair_chart(chart, use_container_width=True)
-        # Download button
         csv = cf_df.to_csv(index=False).encode('utf-8')
         st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
     else:
         st.info("No cash flow forecast data")
 
-    # Additional GR/IR section (optional, keep from original)
     st.markdown("---")
     st.subheader("GR/IR Outstanding Balance (Latest Month)")
     grir_summary_sql = """
@@ -677,50 +411,57 @@ def render_forecast():
     else:
         st.info("No GR/IR summary data")
 
-# ---------------------------- Invoices Page (Search + Table) ----------------------------
-def render_invoices():
+def render_invoices(initial_status_filter=None):
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
-    
-    # Search bar
+
+    # If a filter is passed from dashboard, set it in session state
+    if initial_status_filter and initial_status_filter != "All Status":
+        st.session_state.invoice_status_filter = initial_status_filter
+    else:
+        st.session_state.invoice_status_filter = st.session_state.get("invoice_status_filter", "All Status")
+
+    # Search and filters
     col1, col2 = st.columns([3, 1])
     with col1:
-        search_term = st.text_input("Search by Invoice or PO Number", placeholder="e.g., 9000946 or 5000315", label_visibility="collapsed")
+        search_term = st.text_input("Search by Invoice or PO Number", placeholder="e.g., 9000946", label_visibility="collapsed")
     with col2:
-        search_clicked = st.button("Search", use_container_width=True)
-        reset = st.button("Reset", use_container_width=True)
-        if reset:
+        if st.button("Reset"):
             search_term = ""
+            st.session_state.invoice_status_filter = "All Status"
             st.rerun()
-    
-    # Filters for vendor and status
+
     col_vendor, col_status = st.columns(2)
     with col_vendor:
         vendor_list = ["All Vendors"]
-        vendor_sql = "SELECT DISTINCT vendor_name FROM procure2pay.dim_vendor_vw ORDER BY vendor_name"
-        vendor_df = run_query(vendor_sql)
+        vendor_df = run_query("SELECT DISTINCT vendor_name FROM procure2pay.dim_vendor_vw ORDER BY vendor_name")
         if not vendor_df.empty:
-            vendor_list = ["All Vendors"] + vendor_df["vendor_name"].tolist()
+            vendor_list += vendor_df["vendor_name"].tolist()
         selected_vendor = st.selectbox("Vendor", vendor_list)
     with col_status:
-        status_list = ["All Status", "OPEN", "PAID", "DISPUTED", "OVERDUE"]
-        selected_status = st.selectbox("Status", status_list)
-    
-    # Build base query
-    where_clauses = []
-    if search_term and not reset:
+        status_options = ["All Status", "OPEN", "PAID", "DISPUTED", "OVERDUE", "DUE_NEXT_30"]
+        status_map = {"All Status": "All Status", "OPEN": "OPEN", "PAID": "PAID", "DISPUTED": "DISPUTED", "OVERDUE": "OVERDUE", "DUE_NEXT_30": "OPEN (Due Next 30)"}
+        selected_status_display = st.selectbox("Status", status_options, index=status_options.index(st.session_state.invoice_status_filter) if st.session_state.invoice_status_filter in status_options else 0)
+        selected_status = selected_status_display
+        if selected_status == "DUE_NEXT_30":
+            selected_status = "OPEN"
+
+    # Build where clause
+    where = []
+    if search_term:
         safe_term = search_term.replace("'", "''")
-        where_clauses.append(f"(f.invoice_number = '{safe_term}' OR f.purchase_order_reference = '{safe_term}')")
+        where.append(f"(f.invoice_number = '{safe_term}' OR f.purchase_order_reference = '{safe_term}')")
     if selected_vendor != "All Vendors":
         safe_vendor = selected_vendor.replace("'", "''")
-        where_clauses.append(f"UPPER(v.vendor_name) = UPPER('{safe_vendor}')")
-    if selected_status != "All Status":
-        where_clauses.append(f"UPPER(f.invoice_status) = '{selected_status}'")
-    
-    where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
-    
-    # Query for invoices
-    invoices_sql = f"""
+        where.append(f"UPPER(v.vendor_name) = UPPER('{safe_vendor}')")
+    if selected_status_display != "All Status":
+        if selected_status_display == "DUE_NEXT_30":
+            where.append(f"UPPER(f.invoice_status) = 'OPEN' AND f.due_date >= CURRENT_DATE AND f.due_date <= DATE_ADD('day', 30, CURRENT_DATE)")
+        else:
+            where.append(f"UPPER(f.invoice_status) = '{selected_status}'")
+    where_sql = " AND ".join(where) if where else "1=1"
+
+    query = f"""
     SELECT DISTINCT
         f.invoice_number AS "INVOICE NUMBER",
         v.vendor_name AS "VENDOR NAME",
@@ -735,15 +476,14 @@ def render_invoices():
     ORDER BY f.posting_date DESC
     LIMIT 500
     """
-    invoices_df = run_query(invoices_sql)
-    if not invoices_df.empty:
-        st.dataframe(invoices_df, use_container_width=True, height=400)
-        # If a single invoice is searched, show details (optional)
-        if search_term and len(invoices_df) == 1:
-            inv_num = invoices_df.iloc[0]["INVOICE NUMBER"]
+    df = run_query(query)
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, height=400)
+        # If a single invoice is searched, show detailed view
+        if search_term and len(df) == 1:
+            inv_num = df.iloc[0]["INVOICE NUMBER"]
             st.markdown("---")
             st.subheader(f"Invoice Details: {inv_num}")
-            # Fetch full details
             details_sql = f"""
             SELECT
                 f.invoice_number AS "INVOICE NUMBER",
@@ -763,7 +503,6 @@ def render_invoices():
             details_df = run_query(details_sql)
             if not details_df.empty:
                 st.dataframe(details_df, use_container_width=True)
-            # Status history
             hist_sql = f"""
             SELECT
                 invoice_number AS "INVOICE NUMBER",
@@ -778,7 +517,6 @@ def render_invoices():
             if not hist_df.empty:
                 st.subheader("Status History")
                 st.dataframe(hist_df, use_container_width=True)
-            # Vendor info
             vendor_info_sql = f"""
             SELECT DISTINCT
                 v.vendor_id AS "VENDOR ID",
@@ -801,7 +539,6 @@ def render_invoices():
             if not vendor_df.empty:
                 st.subheader("Vendor Information")
                 st.dataframe(vendor_df, use_container_width=True)
-            # Company info
             company_sql = f"""
             SELECT DISTINCT
                 f.company_code AS "COMPANY CODE",
@@ -820,12 +557,303 @@ def render_invoices():
     else:
         st.info("No invoices found.")
 
-# ---------------------------- Main Router ----------------------------
+def render_dashboard():
+    # Date range state
+    if "preset" not in st.session_state:
+        st.session_state.preset = "Last 30 Days"
+    if "date_range" not in st.session_state:
+        st.session_state.date_range = compute_range_preset(st.session_state.preset)
+
+    # Date range picker and vendor filter (keep from original)
+    col_date, col_vendor, col_preset = st.columns([2, 2, 3])
+    with col_date:
+        date_range = st.date_input(
+            "Date Range",
+            value=st.session_state.date_range,
+            format="YYYY-MM-DD",
+            label_visibility="collapsed"
+        )
+        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+            rng_start, rng_end = date_range
+        else:
+            rng_start, rng_end = st.session_state.date_range
+        st.session_state.date_range = (rng_start, rng_end)
+
+    with col_vendor:
+        vendor_sql = f"""
+        SELECT DISTINCT v.vendor_name
+        FROM {DATABASE}.fact_all_sources_vw f
+        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+        WHERE f.posting_date BETWEEN {sql_date(rng_start)} AND {sql_date(rng_end)}
+          AND v.vendor_name IS NOT NULL
+        ORDER BY 1
+        """
+        vendors_df = run_query(vendor_sql)
+        vendor_list = ["All Vendors"] + vendors_df["vendor_name"].tolist() if not vendors_df.empty else ["All Vendors"]
+        selected_vendor = st.selectbox("Vendor", vendor_list, index=0, label_visibility="collapsed")
+
+    with col_preset:
+        presets = ["Last 30 Days", "QTD", "YTD", "Custom"]
+        current_preset = st.session_state.preset
+        for p in presets:
+            if st.button(p, key=f"preset_{p}", use_container_width=True, type="primary" if p == current_preset else "secondary"):
+                if p == "Custom":
+                    st.session_state.preset = p
+                else:
+                    new_start, new_end = compute_range_preset(p)
+                    st.session_state.date_range = (new_start, new_end)
+                    st.session_state.preset = p
+                st.rerun()
+
+    start_lit = sql_date(rng_start)
+    end_lit = sql_date(rng_end)
+    p_start, p_end = prior_window(rng_start, rng_end)
+    p_start_lit = sql_date(p_start)
+    p_end_lit = sql_date(p_end)
+    vendor_where = build_vendor_where(selected_vendor)
+
+    # --- KPI Queries ---
+    # Current period
+    cur_kpi_sql = f"""
+    SELECT
+        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
+        COUNT(DISTINCT purchase_order_reference) AS total_pos,
+        COUNT(DISTINCT v.vendor_name) AS active_vendors,
+        SUM(CASE WHEN UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
+                 THEN COALESCE(invoice_amount_local, 0) ELSE 0 END) AS total_spend,
+        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN invoice_number END) AS pending_inv,
+        AVG(CASE WHEN UPPER(invoice_status) = 'PAID' THEN DATE_DIFF('day', posting_date, payment_date) END) AS avg_processing_days
+    FROM {DATABASE}.fact_all_sources_vw f
+    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
+    {vendor_where}
+    """
+    cur_df = run_query(cur_kpi_sql)
+    cur_spend = safe_number(cur_df.loc[0, "total_spend"]) if not cur_df.empty else 0
+    cur_active_pos = safe_int(cur_df.loc[0, "active_pos"]) if not cur_df.empty else 0
+    cur_total_pos = safe_int(cur_df.loc[0, "total_pos"]) if not cur_df.empty else 0
+    cur_active_vendors = safe_int(cur_df.loc[0, "active_vendors"]) if not cur_df.empty else 0
+    cur_pending = safe_int(cur_df.loc[0, "pending_inv"]) if not cur_df.empty else 0
+    cur_avg_processing = safe_number(cur_df.loc[0, "avg_processing_days"]) if not cur_df.empty else 0
+
+    # Previous period for deltas
+    prev_kpi_sql = f"""
+    SELECT
+        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
+        COUNT(DISTINCT purchase_order_reference) AS total_pos,
+        COUNT(DISTINCT v.vendor_name) AS active_vendors,
+        SUM(CASE WHEN UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
+                 THEN COALESCE(invoice_amount_local, 0) ELSE 0 END) AS total_spend,
+        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN invoice_number END) AS pending_inv
+    FROM {DATABASE}.fact_all_sources_vw f
+    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+    WHERE f.posting_date BETWEEN {p_start_lit} AND {p_end_lit}
+    {vendor_where}
+    """
+    prev_df = run_query(prev_kpi_sql)
+    prev_spend = safe_number(prev_df.loc[0, "total_spend"]) if not prev_df.empty else 0
+    prev_active_pos = safe_int(prev_df.loc[0, "active_pos"]) if not prev_df.empty else 0
+    prev_total_pos = safe_int(prev_df.loc[0, "total_pos"]) if not prev_df.empty else 0
+    prev_active_vendors = safe_int(prev_df.loc[0, "active_vendors"]) if not prev_df.empty else 0
+    prev_pending = safe_int(prev_df.loc[0, "pending_inv"]) if not prev_df.empty else 0
+
+    spend_delta, spend_up, _ = pct_delta(cur_spend, prev_spend)
+    active_pos_delta, active_pos_up, _ = pct_delta(cur_active_pos, prev_active_pos)
+    total_pos_delta, total_pos_up, _ = pct_delta(cur_total_pos, prev_total_pos)
+    active_vendors_delta, active_vendors_up, _ = pct_delta(cur_active_vendors, prev_active_vendors)
+    pending_delta, pending_up, _ = pct_delta(cur_pending, prev_pending)
+
+    # First pass rate and auto-processed rate
+    first_pass_sql = f"""
+    WITH hist AS (
+        SELECT invoice_number,
+               MAX(CASE WHEN UPPER(status) IN ('PAID','CLEARED','CLOSED','POSTED','SETTLED') THEN 1 ELSE 0 END) AS has_paid,
+               MAX(CASE WHEN UPPER(status) IN ('DISPUTE','DISPUTED','OVERDUE') THEN 1 ELSE 0 END) AS has_issue
+        FROM {DATABASE}.invoice_status_history_vw
+        WHERE posting_date BETWEEN {start_lit} AND {end_lit}
+        GROUP BY invoice_number
+    )
+    SELECT
+        COUNT(*) AS total_inv,
+        SUM(CASE WHEN has_paid = 1 AND has_issue = 0 THEN 1 ELSE 0 END) AS first_pass_inv
+    FROM hist
+    """
+    fp_df = run_query(first_pass_sql)
+    total_inv = safe_int(fp_df.loc[0, "total_inv"]) if not fp_df.empty else 0
+    fp_inv = safe_int(fp_df.loc[0, "first_pass_inv"]) if not fp_df.empty else 0
+    first_pass_rate = (fp_inv / total_inv * 100) if total_inv > 0 else 0
+
+    auto_rate_sql = f"""
+    WITH paid_invoices AS (
+        SELECT invoice_number, status_notes
+        FROM {DATABASE}.invoice_status_history_vw
+        WHERE posting_date BETWEEN {start_lit} AND {end_lit}
+          AND UPPER(status) = 'PAID'
+    )
+    SELECT
+        COUNT(*) AS total_cleared,
+        SUM(CASE WHEN UPPER(status_notes) = 'AUTO PROCESSED' THEN 1 ELSE 0 END) AS auto_processed
+    FROM paid_invoices
+    """
+    auto_df = run_query(auto_rate_sql)
+    total_cleared = safe_int(auto_df.loc[0, "total_cleared"]) if not auto_df.empty else 0
+    auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
+    auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
+
+    # Display KPI cards (first row)
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=f"{'↑' if spend_up else '↓'} {spend_delta}", delta_color="normal")
+    with col2:
+        st.metric("ACTIVE PO'S", f"{cur_active_pos:,}", delta=f"{'↑' if active_pos_up else '↓'} {active_pos_delta}", delta_color="normal")
+    with col3:
+        st.metric("TOTAL PO'S", f"{cur_total_pos:,}", delta=f"{'↑' if total_pos_up else '↓'} {total_pos_delta}", delta_color="normal")
+    with col4:
+        st.metric("ACTIVE VENDORS", f"{cur_active_vendors:,}", delta=f"{'↑' if active_vendors_up else '↓'} {active_vendors_delta}", delta_color="normal")
+
+    # Second row of KPIs
+    col5, col6, col7, col8 = st.columns(4)
+    with col5:
+        st.metric("PENDING INVOICES", f"{cur_pending:,}", delta=f"{'↑' if pending_up else '↓'} {pending_delta}", delta_color="normal")
+    with col6:
+        st.metric("AVG INVOICE PROCESSING TIME", f"{cur_avg_processing:.1f}d")
+    with col7:
+        st.metric("FIRST PASS INVOICES %", f"{first_pass_rate:.1f}%")
+    with col8:
+        st.metric("AUTOPROCESSED %", f"{auto_rate:.1f}%")
+
+    st.markdown("---")
+
+    # --- Needs Attention Section with Pagination ---
+    st.subheader("Needs Attention")
+
+    # Fetch attention data (overdue, disputed, due next 30 days)
+    attention_sql = f"""
+    SELECT
+        f.invoice_number,
+        v.vendor_name,
+        f.invoice_amount_local AS amount,
+        f.due_date,
+        CASE
+            WHEN f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE' THEN 'Overdue'
+            WHEN UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED') THEN 'Disputed'
+            WHEN f.due_date >= CURRENT_DATE AND f.due_date <= DATE_ADD('day', 30, CURRENT_DATE) AND UPPER(f.invoice_status) = 'OPEN' THEN 'Due Next 30 Days'
+        END AS attention_type,
+        f.aging_days
+    FROM {DATABASE}.fact_all_sources_vw f
+    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
+    {vendor_where}
+      AND (
+          (f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE')
+          OR UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED')
+          OR (f.due_date >= CURRENT_DATE AND f.due_date <= DATE_ADD('day', 30, CURRENT_DATE) AND UPPER(f.invoice_status) = 'OPEN')
+      )
+    ORDER BY f.due_date ASC
+    """
+    attention_df = run_query(attention_sql)
+    if not attention_df.empty:
+        # Buttons to navigate to Invoices page with filter
+        col_type1, col_type2, col_type3 = st.columns(3)
+        with col_type1:
+            if st.button(f"⚠️ Overdue ({len(attention_df[attention_df['attention_type']=='Overdue'])})", use_container_width=True):
+                st.session_state.page = "Invoices"
+                st.session_state.invoice_status_filter = "OVERDUE"
+                st.rerun()
+        with col_type2:
+            if st.button(f"⚖️ Disputed ({len(attention_df[attention_df['attention_type']=='Disputed'])})", use_container_width=True):
+                st.session_state.page = "Invoices"
+                st.session_state.invoice_status_filter = "DISPUTED"
+                st.rerun()
+        with col_type3:
+            if st.button(f"📅 Due Next 30 Days ({len(attention_df[attention_df['attention_type']=='Due Next 30 Days'])})", use_container_width=True):
+                st.session_state.page = "Invoices"
+                st.session_state.invoice_status_filter = "DUE_NEXT_30"
+                st.rerun()
+
+        st.markdown("---")
+        # Pagination for the list
+        items_per_page = 8
+        total_items = len(attention_df)
+        if "attention_page" not in st.session_state:
+            st.session_state.attention_page = 0
+        total_pages = (total_items - 1) // items_per_page + 1 if total_items > 0 else 1
+        start_idx = st.session_state.attention_page * items_per_page
+        end_idx = min(start_idx + items_per_page, total_items)
+        page_df = attention_df.iloc[start_idx:end_idx]
+
+        # Display each item as a card
+        for _, row in page_df.iterrows():
+            inv_num = row['invoice_number']
+            vendor = row['vendor_name']
+            amount = row['amount']
+            due_date = row['due_date']
+            att_type = row['attention_type']
+            if att_type == "Overdue":
+                border_color = "#ef4444"
+                bg_color = "#fee2e2"
+            elif att_type == "Disputed":
+                border_color = "#f59e0b"
+                bg_color = "#fef3c7"
+            else:
+                border_color = "#3b82f6"
+                bg_color = "#dbeafe"
+            st.markdown(f"""
+            <div style="border-left: 4px solid {border_color}; background-color: {bg_color}; border-radius: 12px; padding: 0.75rem; margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <strong>{inv_num}</strong><br>
+                    <span style="font-size: 0.8rem;">{vendor}</span>
+                </div>
+                <div style="text-align: right;">
+                    <strong>{abbr_currency(amount)}</strong><br>
+                    <span style="font-size: 0.7rem;">Due: {due_date}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Pagination controls
+        col_prev, col_page_info, col_next = st.columns([1, 2, 1])
+        with col_prev:
+            if st.button("← Prev", disabled=(st.session_state.attention_page == 0)):
+                st.session_state.attention_page -= 1
+                st.rerun()
+        with col_page_info:
+            st.markdown(f"<div style='text-align: center;'>{st.session_state.attention_page + 1} of {total_pages}</div>", unsafe_allow_html=True)
+        with col_next:
+            if st.button("Next →", disabled=(st.session_state.attention_page >= total_pages - 1)):
+                st.session_state.attention_page += 1
+                st.rerun()
+    else:
+        st.info("No attention items found for the selected period.")
+
+# ---------------------------- Main App Layout ----------------------------
+# Top-left logo and title
+logo_url = "https://th.bing.com/th/id/OIP.Vy1yFQtg8-D1SsAxcqqtSgHaE6?w=235&h=180&c=7&r=0&o=7&dpr=1.5&pid=1.7&rm=3"
+st.markdown(f"""
+<div style="display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem;">
+    <img src="{logo_url}" style="height: 45px; width: auto;">
+    <div>
+        <div style="font-size: 1.6rem; font-weight: 600; color: #111827;">ProcureIQ</div>
+        <div style="font-size: 0.85rem; color: #6b7280;">P2P Analytics</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Sidebar navigation
+with st.sidebar:
+    st.markdown("## Dashboards")
+    page = st.radio("Navigation", ["Dashboard", "Genie", "Forecast", "Invoices"], label_visibility="collapsed")
+    st.markdown("---")
+    st.image(logo_url, width=60)
+    st.caption("YASH Technologies\n*More than what you think.*")
+
+# Router
 if page == "Dashboard":
     render_dashboard()
 elif page == "Genie":
     render_genie()
 elif page == "Forecast":
     render_forecast()
-else:
-    render_invoices()
+else:  # Invoices
+    status_filter = st.session_state.get("invoice_status_filter", None)
+    render_invoices(initial_status_filter=status_filter)
