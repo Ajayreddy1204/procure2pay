@@ -229,11 +229,10 @@ def render_genie():
     st.subheader("🤖 YashNovaAI – Genie")
     st.markdown("Ask any question about your procurement data in plain English. The AI will generate SQL, run it on Athena, and explain the results.")
     
-    # Check if we have a pre‑filled prompt from the Forecast page
+    # Check for pre‑filled prompt from Forecast page
     if "genie_prompt" in st.session_state and st.session_state.genie_prompt:
         prompt = st.session_state.genie_prompt
-        st.session_state.genie_prompt = None  # clear after use
-        # Auto‑submit the prompt
+        st.session_state.genie_prompt = None
         if "messages" not in st.session_state:
             st.session_state.messages = []
         st.session_state.messages.append({"role": "user", "content": prompt})
@@ -278,10 +277,9 @@ Please provide a natural language answer to the user's original question based o
                                 if chart:
                                     st.altair_chart(chart, use_container_width=True)
                                 st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
-        # Force a rerun to display the messages properly
         st.rerun()
     
-    # Display existing chat messages
+    # Display existing messages
     if "messages" not in st.session_state:
         st.session_state.messages = []
     for msg in st.session_state.messages:
@@ -296,7 +294,7 @@ Please provide a natural language answer to the user's original question based o
                 if chart:
                     st.altair_chart(chart, use_container_width=True)
     
-    # Chat input for new questions
+    # Chat input
     if prompt := st.chat_input("Ask a question, e.g., 'Show top 5 vendors by spend this year'..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -345,7 +343,6 @@ Please provide a natural language answer to the user's original question based o
 def render_forecast():
     st.subheader("Cash Flow Need Forecast")
     
-    # Query for cash flow data
     cf_sql = """
     WITH base AS (
         SELECT document_number, vendor_id, invoice_amount_local, due_date, invoice_status, days_until_due
@@ -408,13 +405,11 @@ def render_forecast():
     """
     cf_df = run_query(cf_sql)
     if not cf_df.empty:
-        # Extract metrics
         total_unpaid = cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"].empty else 0
         overdue_now = cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"].empty else 0
         due_30 = cf_df[cf_df["forecast_bucket"].isin(["DUE_7_DAYS","DUE_14_DAYS","DUE_30_DAYS"])]["total_amount"].sum()
         pct_due_30 = (due_30 / total_unpaid * 100) if total_unpaid > 0 else 0
         
-        # Display KPI metrics in 4 columns
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("TOTAL UNPAID", abbr_currency(total_unpaid))
         col2.metric("OVERDUE NOW", abbr_currency(overdue_now))
@@ -425,11 +420,10 @@ def render_forecast():
         st.subheader("Obligations by time bucket")
         st.dataframe(cf_df, use_container_width=True)
         
-        # Download button
         csv = cf_df.to_csv(index=False).encode('utf-8')
         st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
         
-        # Bar chart (optional, but can be kept)
+        # Optional bar chart
         chart_df = cf_df[~cf_df["forecast_bucket"].isin(["TOTAL_UNPAID", "PROCESSING_LAG_DAYS"])].copy()
         if not chart_df.empty:
             st.markdown("---")
@@ -447,7 +441,6 @@ def render_forecast():
     st.subheader("Action Playbook")
     st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late. Each button opens Genie with a pre‑built question wired to the right verified queries.")
     
-    # Define action buttons and their questions
     actions = [
         ("📊 Forecast cash outflow (7–90 days)", "Forecast cash outflow for the next 7 to 90 days, showing expected payment amounts by week."),
         ("💰 Invoices to pay early to capture discounts", "List invoices that offer early payment discounts, sorted by discount amount and due date."),
@@ -455,18 +448,16 @@ def render_forecast():
         ("⚠️ Late payment trend and risk", "Analyze late payment trends over the last 6 months and identify high‑risk vendors.")
     ]
     
-    cols = st.columns(2)  # two buttons per row
+    cols = st.columns(2)
     for idx, (label, question) in enumerate(actions):
         with cols[idx % 2]:
             if st.button(label, use_container_width=True):
-                # Set session state to switch to Genie and pre‑fill the prompt
                 st.session_state.page = "Genie"
                 st.session_state.genie_prompt = question
                 st.rerun()
     
     st.markdown("---")
     st.subheader("GR/IR Reconciliation")
-    # GR/IR summary (latest month)
     grir_summary_sql = """
     WITH latest AS (
         SELECT year, month, invoice_count, total_grir_blnc
@@ -505,16 +496,21 @@ def render_invoices(initial_invoice_number=None):
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
 
+    # Clean invoice number if passed (remove .0)
     if initial_invoice_number:
-        st.session_state.invoice_search_term = str(initial_invoice_number)
+        try:
+            clean_num = str(int(float(initial_invoice_number)))
+        except:
+            clean_num = str(initial_invoice_number)
+        st.session_state.invoice_search_term = clean_num
     else:
         st.session_state.invoice_search_term = st.session_state.get("invoice_search_term", "")
 
     col1, col2 = st.columns([3, 1])
     with col1:
-        search_term = st.text_input("Search by Invoice or PO Number", 
+        search_term = st.text_input("Search by Invoice or PO Number",
                                     value=st.session_state.invoice_search_term,
-                                    placeholder="e.g., 9000946", 
+                                    placeholder="e.g., 9000946",
                                     label_visibility="collapsed",
                                     key="invoice_search_input")
     with col2:
@@ -532,8 +528,8 @@ def render_invoices(initial_invoice_number=None):
         selected_vendor = st.selectbox("Vendor", vendor_list)
     with col_status:
         status_options = ["All Status", "OPEN", "PAID", "DISPUTED", "OVERDUE", "DUE_NEXT_30"]
-        selected_status_display = st.selectbox("Status", status_options, 
-                                               index=status_options.index(st.session_state.get("invoice_status_filter", "All Status")) 
+        selected_status_display = st.selectbox("Status", status_options,
+                                               index=status_options.index(st.session_state.get("invoice_status_filter", "All Status"))
                                                if st.session_state.get("invoice_status_filter", "All Status") in status_options else 0)
         selected_status = selected_status_display
         if selected_status == "DUE_NEXT_30":
@@ -542,7 +538,8 @@ def render_invoices(initial_invoice_number=None):
     where = []
     if search_term:
         safe_term = search_term.replace("'", "''")
-        where.append(f"(f.invoice_number = '{safe_term}' OR f.purchase_order_reference = '{safe_term}')")
+        # CAST to VARCHAR to avoid decimal/string mismatch
+        where.append(f"CAST(f.invoice_number AS VARCHAR) = '{safe_term}'")
     if selected_vendor != "All Vendors":
         safe_vendor = selected_vendor.replace("'", "''")
         where.append(f"UPPER(v.vendor_name) = UPPER('{safe_vendor}')")
@@ -588,7 +585,7 @@ def render_invoices(initial_invoice_number=None):
                 f.fiscal_year AS "FISCAL YEAR",
                 f.aging_days AS "AGING DAYS"
             FROM {DATABASE}.fact_all_sources_vw f
-            WHERE f.invoice_number = '{inv_num}'
+            WHERE CAST(f.invoice_number AS VARCHAR) = '{inv_num}'
             LIMIT 1
             """
             details_df = run_query(details_sql)
@@ -601,7 +598,7 @@ def render_invoices(initial_invoice_number=None):
                 effective_date AS "EFFECTIVE DATE",
                 status_notes AS "STATUS NOTES"
             FROM {DATABASE}.invoice_status_history_vw
-            WHERE invoice_number = '{inv_num}'
+            WHERE CAST(invoice_number AS VARCHAR) = '{inv_num}'
             ORDER BY sequence_nbr
             """
             hist_df = run_query(hist_sql)
@@ -624,7 +621,7 @@ def render_invoices(initial_invoice_number=None):
                 v.tax_number_2 AS "TAX NUMBER 2"
             FROM {DATABASE}.fact_all_sources_vw f
             LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-            WHERE f.invoice_number = '{inv_num}'
+            WHERE CAST(f.invoice_number AS VARCHAR) = '{inv_num}'
             """
             vendor_df = run_query(vendor_info_sql)
             if not vendor_df.empty:
@@ -639,7 +636,7 @@ def render_invoices(initial_invoice_number=None):
             FROM {DATABASE}.fact_all_sources_vw f
             LEFT JOIN {DATABASE}.dim_company_code_vw cc ON f.company_code = cc.company_code
             LEFT JOIN {DATABASE}.dim_plant_vw plt ON f.plant_code = plt.plant_code
-            WHERE f.invoice_number = '{inv_num}'
+            WHERE CAST(f.invoice_number AS VARCHAR) = '{inv_num}'
             """
             company_df = run_query(company_sql)
             if not company_df.empty:
@@ -648,7 +645,7 @@ def render_invoices(initial_invoice_number=None):
     else:
         st.info("No invoices found.")
 
-# ---------------------------- Custom CSS for card buttons ----------------------------
+# ---------------------------- Custom CSS ----------------------------
 def load_custom_css():
     st.markdown("""
     <style>
@@ -678,7 +675,6 @@ def load_custom_css():
 def render_dashboard():
     load_custom_css()
 
-    # Date range state
     if "preset" not in st.session_state:
         st.session_state.preset = "Last 30 Days"
     if "date_range" not in st.session_state:
@@ -736,7 +732,7 @@ def render_dashboard():
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
 
-    # --- KPI Queries ---
+    # KPI queries
     cur_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -785,7 +781,7 @@ def render_dashboard():
     active_vendors_delta, _ = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, _ = pct_delta(cur_pending, prev_pending)
 
-    # First pass and auto-processed rates
+    # First pass & auto rates
     first_pass_sql = f"""
     WITH hist AS (
         SELECT invoice_number,
@@ -822,7 +818,7 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
-    # Display KPI cards
+    # KPI cards
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
@@ -845,9 +841,8 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # --- Needs Attention Section (Paginated Grid) ---
+    # Needs Attention section
     st.subheader("Needs Attention")
-
     attention_sql = f"""
     SELECT
         f.invoice_number,
@@ -933,9 +928,14 @@ def render_dashboard():
                             <div style="font-size: 0.7rem; margin-bottom: 0.5rem;">Due: {due_date}</div>
                         </div>
                         """, unsafe_allow_html=True)
-                        if st.button(f"📄 Invoice {inv_num}", key=f"att_{inv_num}_{start_idx+col_idx}", use_container_width=True):
+                        # Clean invoice number for navigation
+                        try:
+                            clean_inv = str(int(float(inv_num)))
+                        except:
+                            clean_inv = str(inv_num)
+                        if st.button(f"📄 Invoice {clean_inv}", key=f"att_{inv_num}_{start_idx+col_idx}", use_container_width=True):
                             st.session_state.page = "Invoices"
-                            st.session_state.invoice_search_term = str(inv_num)
+                            st.session_state.invoice_search_term = clean_inv
                             st.rerun()
 
         col_prev, col_page_info, col_next = st.columns([1, 2, 1])
@@ -956,8 +956,6 @@ def render_dashboard():
 
     # Charts section
     st.subheader("Analytics")
-
-    # 1. Invoice Status Pie Chart
     status_sql = f"""
     SELECT
         CASE
@@ -984,7 +982,6 @@ def render_dashboard():
     else:
         st.info("No invoice status data")
 
-    # 2. Top 10 Vendors by Spend
     top_vendors_sql = f"""
     SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
     FROM {DATABASE}.fact_all_sources_vw f
@@ -1008,7 +1005,6 @@ def render_dashboard():
     else:
         st.info("No vendor spend data")
 
-    # 3. Monthly Spend Trend
     trend_sql = f"""
     WITH monthly_data AS (
         SELECT
@@ -1050,7 +1046,6 @@ def render_dashboard():
 # ---------------------------- Main App Layout ----------------------------
 logo_url = "https://th.bing.com/th/id/OIP.Vy1yFQtg8-D1SsAxcqqtSgHaE6?w=235&h=180&c=7&r=0&o=7&dpr=1.5&pid=1.7&rm=3"
 
-# First line: procure2pay (bold), nav buttons, logo on right
 col_title, col_nav, col_logo = st.columns([1, 3, 1])
 with col_title:
     st.markdown("<h1 style='font-weight: bold; margin-bottom: 0;'>procure2pay</h1>", unsafe_allow_html=True)
@@ -1075,16 +1070,12 @@ with col_nav:
 with col_logo:
     st.image(logo_url, width=50)
 
-# Second line: subtitle
 st.markdown("<p style='font-size: 0.9rem; color: gray; margin-top: -0.5rem;'>p2pAnalytics</p>", unsafe_allow_html=True)
-
 st.markdown("---")
 
-# Initialize page state
 if "page" not in st.session_state:
     st.session_state.page = "Dashboard"
 
-# Router
 if st.session_state.page == "Dashboard":
     render_dashboard()
 elif st.session_state.page == "Genie":
