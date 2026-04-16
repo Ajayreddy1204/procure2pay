@@ -119,7 +119,7 @@ def _safe_pct_str(val, default=0.0):
     return f"{sign}{v:.1f}%"
 
 # ---------------------------- AI Chat Functions (Bedrock Nova) ----------------------------
-# Full semantic model YAML (condensed but complete for Athena)
+# Full semantic model YAML (condensed but complete enough for Athena)
 SEMANTIC_MODEL_YAML = """
 name: "P2P Procure-to-Pay Analytics"
 description: "Procure-to-Pay and Invoice-to-Pay analytics. Invoice status (Open, Due, Overdue, Disputed, Paid), vendor spend, payment performance, aging, PO linkage, cost reduction opportunities."
@@ -1119,6 +1119,7 @@ def render_genie():
 
                         # Prescriptive insights using Bedrock (simulate Cortex)
                         st.subheader("Prescriptive — Recommendations & next steps")
+                        # Generate prescriptive text from data
                         prescriptive_text = generate_prescriptive_from_quick(resp)
                         if prescriptive_text:
                             st.markdown(f'<div style="font-size:14px; line-height:1.6;">{prescriptive_text}</div>', unsafe_allow_html=True)
@@ -1215,11 +1216,11 @@ def generate_prescriptive_from_quick(resp: dict) -> str:
         return "No specific prescriptive insights available based on the data."
     return "<br/>".join(insights[:6])
 
-# ---------------------------- FORECAST PAGE (Fixed: Cash Flow + GR/IR) ----------------------------
+# ---------------------------- FORECAST PAGE (Cash Flow + GR/IR) ----------------------------
 def render_forecast():
     st.subheader("Cash Flow Need Forecast")
 
-    # Cash flow forecast – try view, fallback to computation
+    # Cash flow forecast
     cf_sql = f"""
         SELECT
             forecast_bucket,
@@ -1308,13 +1309,11 @@ def render_forecast():
         col4.metric("% DUE ≤ 30 DAYS", f"{pct_due_30:.1f}%")
 
         st.markdown("**Obligations by time bucket**")
-        # Ensure proper display: rename bucket if needed (the view should have names)
-        display_df = cf_df.copy()
-        st.dataframe(display_df, use_container_width=True)
-        csv = display_df.to_csv(index=False).encode('utf-8')
+        st.dataframe(cf_df, use_container_width=True)
+        csv = cf_df.to_csv(index=False).encode('utf-8')
         st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
 
-        chart_df = display_df[~display_df["forecast_bucket"].isin(["TOTAL_UNPAID", "PROCESSING_LAG_DAYS"])].copy()
+        chart_df = cf_df[~cf_df["forecast_bucket"].isin(["TOTAL_UNPAID", "PROCESSING_LAG_DAYS"])].copy()
         if not chart_df.empty:
             st.markdown("**Forecast Distribution**")
             chart = alt.Chart(chart_df).mark_bar(color="#10b981").encode(
@@ -1329,7 +1328,7 @@ def render_forecast():
     # Action Playbook
     st.markdown("---")
     st.markdown("### Action Playbook")
-    st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late. Each button opens Genie with a pre-built question wired to the right verified queries.")
+    st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late.")
     actions = [
         ("📊 Forecast cash outflow (7–90 days)", "Forecast cash outflow for the next 7, 14, 30, 60, and 90 days"),
         ("💰 Invoices to pay early to capture discounts", "Which invoices should we pay early to capture discounts?"),
@@ -1346,78 +1345,45 @@ def render_forecast():
     # GR/IR Reconciliation
     st.markdown("---")
     st.subheader("GR/IR Reconciliation")
+    tab1, tab2 = st.tabs(["Outstanding Balance", "Aging Analysis"])
 
-    # GR/IR KPIs and position note
-    grir_summary_sql = f"""
-        WITH latest AS (
-            SELECT year, month, invoice_count, total_grir_blnc
-            FROM {DATABASE}.gr_ir_outstanding_balance_vw
-            ORDER BY year DESC, month DESC
-            LIMIT 1
-        ),
-        aging_latest AS (
-            SELECT year, month, pct_grir_over_60, cnt_grir_over_60
-            FROM {DATABASE}.gr_ir_aging_vw
-            ORDER BY year DESC, month DESC
-            LIMIT 1
-        )
-        SELECT
-            l.year,
-            l.month,
-            l.invoice_count AS grir_items,
-            l.total_grir_blnc AS total_grir_balance,
-            a.pct_grir_over_60,
-            a.cnt_grir_over_60,
-            COALESCE(l.total_grir_blnc * a.pct_grir_over_60 / 100, 0) AS amount_over_60_days
-        FROM latest l
-        LEFT JOIN aging_latest a ON a.year = l.year AND a.month = l.month
-    """
-    grir_df = run_query(grir_summary_sql)
-    if not grir_df.empty:
-        row = grir_df.iloc[0]
-        total_grir = safe_number(row.get("total_grir_balance", 0))
-        grir_items = safe_int(row.get("grir_items", 0))
-        pct_over_60 = safe_number(row.get("pct_grir_over_60", 0))
-        amount_over_60 = safe_number(row.get("amount_over_60_days", 0))
-        cnt_over_60 = safe_int(row.get("cnt_grir_over_60", 0))
-        year = safe_int(row.get("year", 0))
-        month = safe_int(row.get("month", 0))
-
-        grir_cols = st.columns(4)
-        grir_cols[0].metric("TOTAL GR/IR", abbr_currency(total_grir))
-        grir_cols[1].metric("% > 60 DAYS", f"{pct_over_60:.1f}%")
-        grir_cols[2].metric("> 60 DAYS AMOUNT", abbr_currency(amount_over_60))
-        grir_cols[3].metric("> 60 DAYS ITEMS", f"{cnt_over_60:,}")
-
-        # Position note
-        st.caption(f"GR/IR position for {year:04d}-{month:02d}: {grir_items:,} items outstanding; {pct_over_60:.1f}% of balance and {cnt_over_60:,} items are older than 60 days.")
-
-        # GR/IR outstanding trend chart (last 24 months)
-        trend_sql = f"""
-            SELECT
-                TO_DATE(TO_CHAR(year) || '-' || LPAD(CAST(month AS VARCHAR), 2, '0') || '-01') AS month_date,
-                invoice_count,
-                total_grir_blnc
-            FROM {DATABASE}.gr_ir_outstanding_balance_vw
-            ORDER BY year DESC, month DESC
-            LIMIT 24
+    with tab1:
+        grir_summary_sql = f"""
+            WITH latest AS (
+                SELECT year, month, invoice_count, total_grir_blnc
+                FROM {DATABASE}.gr_ir_outstanding_balance_vw
+                ORDER BY year DESC, month DESC
+                LIMIT 1
+            )
+            SELECT year, month, invoice_count AS grir_items, total_grir_blnc AS total_grir_balance
+            FROM latest
         """
-        trend_df = run_query(trend_sql)
-        if not trend_df.empty:
-            trend_df = trend_df.sort_values("month_date")
-            st.markdown("**GR/IR outstanding trend (last 24 months)**")
-            try:
-                alt_line_monthly(
-                    trend_df.rename(columns={"month_date": "MONTH", "total_grir_blnc": "VALUE"}),
-                    month_col="MONTH",
-                    value_col="VALUE",
-                    height=250,
-                    title="Total GR/IR balance over time",
-                )
-            except Exception:
-                st.dataframe(trend_df, use_container_width=True)
-    else:
-        st.info("No GR/IR data found.")
+        grir_df = run_query(grir_summary_sql)
+        if not grir_df.empty:
+            row = grir_df.iloc[0]
+            total_grir = safe_number(row.get("total_grir_balance", 0))
+            grir_items = safe_int(row.get("grir_items", 0))
+            col_a, col_b = st.columns(2)
+            col_a.metric("TOTAL GR/IR", abbr_currency(total_grir))
+            col_b.metric("OUTSTANDING ITEMS", f"{grir_items:,}")
+            st.dataframe(grir_df, use_container_width=True)
+        else:
+            st.info("No GR/IR outstanding data found.")
+
+    with tab2:
+        aging_sql = f"""
+            SELECT year, month, age_days, total_grir_balance, grir_over_30, grir_over_60, grir_over_90
+            FROM {DATABASE}.gr_ir_aging_vw
+            ORDER BY year DESC, month DESC, age_days
+            LIMIT 50
+        """
+        aging_df = run_query(aging_sql)
+        if not aging_df.empty:
+            over_60 = safe_number(aging_df["grir_over_60"].iloc[0] if not aging_df.empty else 0)
+            st.metric(">60 DAYS GR/IR", abbr_currency(over_60))
+            st.dataframe(aging_df, use_container_width=True)
+        else:
+            st.info("No GR/IR aging data found.")
 
 # ---------------------------- INVOICES PAGE ----------------------------
 def render_invoices():
