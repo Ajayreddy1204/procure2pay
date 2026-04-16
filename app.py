@@ -102,160 +102,219 @@ def pct_delta(cur, prev):
     sign = "↑" if change >= 0 else "↓"
     return f"{sign} {change:+.1f}%".replace("+", "+"), change >= 0
 
-# ---------------------------- AI Chat Functions (unchanged) ----------------------------
-SYSTEM_PROMPT = """
-You are an AI assistant that helps users query a procurement database using SQL (Athena/Presto). Given a user's natural language question, generate a valid SQL query for Athena (Presto dialect) based on the following schema.
-
-Tables and views in the `procure2pay` database:
-
-1. `fact_all_sources_vw` – main fact table with invoice and PO data. Columns:
-   - invoice_number, invoice_amount_local, posting_date (DATE), due_date, purchase_order_reference, invoice_status (Open, Due, Overdue, Disputed, Paid, etc.), vendor_id, company_code, plant_code, aging_days, po_amount, po_purpose, payment_date, etc.
-
-2. `dim_vendor_vw` – vendor master data. Columns: vendor_id, vendor_name, vendor_name_2, country_code, city, postal_code, street, region_code, industry_sector, vendor_account_group, tax_number_1, tax_number_2, deletion_flag, posting_block, system.
-
-3. `invoice_status_history_vw` – status change history. Columns: invoice_number, status, effective_date, status_notes, sequence_nbr, posting_date, due_date, vendor_id, invoice_amount_local, payment_date, clearing_document, aging_days, purchase_order_reference, po_amount, po_purpose, document_type, discount_percent, region, system.
-
-4. `cash_flow_unpaid_obligations_vw` – unpaid invoices for cash flow. Columns: document_number, vendor_id, invoice_amount_local, due_date, invoice_status, days_until_due.
-
-5. `payment_processing_cycle_time_vw` – payment cycle metrics. Columns: year, month, avg_payment_cycle_time_days, cleared_invoices.
-
-6. `gr_ir_outstanding_balance_vw` – GR/IR outstanding. Columns: year, month, invoice_count, total_grir_blnc.
-
-7. `gr_ir_aging_vw` – GR/IR aging. Columns: year, month, age_days, total_grir_balance, grir_over_30, grir_over_60, grir_over_90, pct_grir_over_30, pct_grir_over_60, pct_grir_over_90, cnt_grir_over_30, cnt_grir_over_60, cnt_grir_over_90.
-
-8. `dim_company_code_vw` – company codes. Columns: company_code, company_name, street, city, postal_code, country_code, region_code, currency, vat_reg_number, chart_of_accounts, system.
-
-9. `dim_plant_vw` – plant master. Columns: plant_code, plant_name, plant_name_2, company_code, country_code, region_code, city, postal_code, street, system.
-
-Important notes:
-- Use standard Presto/Athena SQL functions (DATE_TRUNC, DATE_ADD, DATE_DIFF, etc.).
-- For date filtering, prefer `posting_date BETWEEN DATE '...' AND DATE '...'`.
-- Always use COALESCE for null amounts.
-- Exclude CANCELLED and REJECTED invoices from spend metrics unless asked.
-- For aggregate queries, always add a reasonable LIMIT (e.g., 100) unless the user asks for all rows.
-- Output only a JSON object with two keys: "sql" containing the SQL query string, and "explanation" containing a brief explanation of what the query does. Do not include any other text.
-"""
-
-def ask_bedrock(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
-    try:
-        body = json.dumps({
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [{"text": prompt}]
-                }
-            ],
-            "system": [{"text": system_prompt}],
-            "inferenceConfig": {
-                "maxTokens": 4096,
-                "temperature": 0.0,
-                "topP": 0.9
-            }
-        })
-        response = bedrock_runtime.invoke_model(
-            modelId=BEDROCK_MODEL_ID,
-            contentType="application/json",
-            accept="application/json",
-            body=body
-        )
-        response_body = json.loads(response['body'].read())
-        return response_body['output']['message']['content'][0]['text']
-    except Exception as e:
-        st.error(f"Bedrock invocation failed: {e}")
-        return ""
-
-def generate_sql(question: str) -> tuple:
-    prompt = f"User question: {question}\n\nGenerate SQL query and explanation as JSON."
-    response = ask_bedrock(prompt)
-    if not response:
-        return None, "Bedrock returned empty response."
-    json_match = re.search(r'\{.*\}$', response, re.DOTALL)
-    json_str = json_match.group(0) if json_match else response
-    try:
-        data = json.loads(json_str)
-        sql = data.get("sql", "").strip()
-        explanation = data.get("explanation", "")
-        return sql, explanation
-    except json.JSONDecodeError as e:
-        st.error(f"Failed to parse JSON: {e}\nResponse: {response}")
-        return None, "Could not parse SQL from AI response."
-
-def is_safe_sql(sql: str) -> bool:
-    sql_lower = sql.lower().strip()
-    if not sql_lower.startswith("select"):
-        return False
-    dangerous = ["insert", "update", "delete", "drop", "alter", "create", "truncate", "grant", "revoke"]
-    for word in dangerous:
-        if re.search(r'\b' + word + r'\b', sql_lower):
-            return False
-    return True
-
-def ensure_limit(sql: str, default_limit: int = 100) -> str:
-    sql_lower = sql.lower()
-    if "limit" in sql_lower:
-        return sql
-    if re.search(r'\b(count|sum|avg|min|max)\b', sql_lower) and "group by" not in sql_lower:
-        return sql
-    return f"{sql.rstrip(';')} LIMIT {default_limit}"
-
-def auto_chart(df: pd.DataFrame) -> Union[alt.Chart, None]:
-    if df.empty or len(df) > 200:
-        return None
-    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-    if not numeric_cols:
-        return None
-    dim_candidates = [c for c in df.columns if c not in numeric_cols]
-    if dim_candidates:
-        dim = dim_candidates[0]
-        if len(numeric_cols) == 1:
-            chart = alt.Chart(df).mark_bar().encode(
-                x=alt.X(dim, sort=None),
-                y=alt.Y(numeric_cols[0]),
-                tooltip=[dim, numeric_cols[0]]
-            )
-        else:
-            melted = df.melt(id_vars=[dim], value_vars=numeric_cols)
-            chart = alt.Chart(melted).mark_line(point=True).encode(
-                x=alt.X(dim, sort=None),
-                y=alt.Y('value', title='Value'),
-                color='variable',
-                tooltip=[dim, 'variable', 'value']
-            )
-        return chart.interactive()
-    return None
-
-# ---------------------------- Page Renderers ----------------------------
-def render_genie():
-    st.subheader("🤖 YashNovaAI – Genie")
-    st.markdown("Ask any question about your procurement data in plain English. The AI will generate SQL, run it on Athena, and explain the results.")
+# ---------------------------- Pre‑defined Analytical Functions for Genie ----------------------------
+def run_spending_overview():
+    """Execute queries for Spending Overview and display formatted results."""
+    st.markdown("## Spending Overview")
     
+    # YTD date range
+    today = date.today()
+    ytd_start = date(today.year, 1, 1)
+    start_lit = sql_date(ytd_start)
+    end_lit = sql_date(today)
+    
+    # Current YTD spend
+    cur_spend_sql = f"""
+    SELECT SUM(COALESCE(invoice_amount_local, 0)) AS total_spend
+    FROM {DATABASE}.fact_all_sources_vw
+    WHERE posting_date BETWEEN {start_lit} AND {end_lit}
+      AND UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
+    """
+    cur_spend = safe_number(run_query(cur_spend_sql).loc[0, "total_spend"]) if not run_query(cur_spend_sql).empty else 0
+    
+    # Previous month (for MoM change)
+    last_month_start = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+    last_month_end = today.replace(day=1) - timedelta(days=1)
+    prev_spend_sql = f"""
+    SELECT SUM(COALESCE(invoice_amount_local, 0)) AS total_spend
+    FROM {DATABASE}.fact_all_sources_vw
+    WHERE posting_date BETWEEN {sql_date(last_month_start)} AND {sql_date(last_month_end)}
+      AND UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
+    """
+    prev_spend = safe_number(run_query(prev_spend_sql).loc[0, "total_spend"]) if not run_query(prev_spend_sql).empty else 0
+    mom_change = ((cur_spend - prev_spend) / prev_spend * 100) if prev_spend > 0 else 0
+    
+    col1, col2 = st.columns(2)
+    col1.metric("Total Spend (YTD)", abbr_currency(cur_spend))
+    col2.metric("MoM Change", f"{mom_change:+.1f}%", delta=f"{mom_change:+.1f}%", delta_color="normal")
+    
+    # Top 5 vendors by spend YTD
+    top_vendors_sql = f"""
+    SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
+    FROM {DATABASE}.fact_all_sources_vw f
+    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
+      AND UPPER(f.invoice_status) NOT IN ('CANCELLED','REJECTED')
+    GROUP BY 1
+    ORDER BY spend DESC
+    LIMIT 5
+    """
+    top_df = run_query(top_vendors_sql)
+    if not top_df.empty:
+        total_spend = top_df['spend'].sum()
+        top_df['percentage'] = (top_df['spend'] / cur_spend * 100).round(1) if cur_spend > 0 else 0
+        st.markdown("**Top 5 Vendors**")
+        for _, row in top_df.iterrows():
+            st.write(f"- {row['vendor_name']}: {abbr_currency(row['spend'])} ({row['percentage']:.1f}% of total)")
+    
+    # Anomaly detection: find month with highest MoM increase in last 12 months
+    anomaly_sql = f"""
+    WITH monthly AS (
+        SELECT 
+            DATE_TRUNC('month', posting_date) AS month,
+            SUM(COALESCE(invoice_amount_local, 0)) AS spend
+        FROM {DATABASE}.fact_all_sources_vw
+        WHERE posting_date >= DATE_ADD('month', -12, {end_lit})
+          AND UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
+        GROUP BY 1
+    ),
+    mom AS (
+        SELECT 
+            month,
+            spend,
+            LAG(spend) OVER (ORDER BY month) AS prev_spend,
+            (spend - LAG(spend) OVER (ORDER BY month)) / NULLIF(LAG(spend) OVER (ORDER BY month), 0) * 100 AS pct_change
+        FROM monthly
+    )
+    SELECT month, spend, pct_change
+    FROM mom
+    WHERE pct_change = (SELECT MAX(pct_change) FROM mom)
+    LIMIT 1
+    """
+    anomaly_df = run_query(anomaly_sql)
+    if not anomaly_df.empty:
+        month = anomaly_df.iloc[0]['month'].strftime('%Y-%m')
+        pct = anomaly_df.iloc[0]['pct_change']
+        st.info(f"**Anomaly Detected** – {month} spending spiked by {pct:.0f}% vs prior month.")
+    
+    # Monthly spend trend (last 12 months)
+    trend_sql = f"""
+    SELECT 
+        DATE_TRUNC('month', posting_date) AS month,
+        SUM(COALESCE(invoice_amount_local, 0)) AS spend
+    FROM {DATABASE}.fact_all_sources_vw
+    WHERE posting_date >= DATE_ADD('month', -12, {end_lit})
+      AND UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
+    GROUP BY 1
+    ORDER BY 1
+    """
+    trend_df = run_query(trend_sql)
+    if not trend_df.empty:
+        trend_df['month_str'] = trend_df['month'].dt.strftime('%b %Y')
+        chart = alt.Chart(trend_df).mark_line(point=True, color="#1e88e5").encode(
+            x=alt.X("month_str:N", sort=None, axis=alt.Axis(title=None, labelAngle=-45)),
+            y=alt.Y("spend:Q", axis=alt.Axis(title="Spend", format="~s")),
+            tooltip=["month_str", alt.Tooltip("spend:Q", format=",.0f")]
+        ).properties(title="Monthly Spend Trend (Last 12 Months)", height=300)
+        st.altair_chart(chart, use_container_width=True)
+    
+    # Invoice volume and active vendors by month (last 12 months)
+    volume_sql = f"""
+    SELECT 
+        DATE_TRUNC('month', posting_date) AS month,
+        COUNT(DISTINCT invoice_number) AS invoice_volume,
+        COUNT(DISTINCT vendor_id) AS active_vendors
+    FROM {DATABASE}.fact_all_sources_vw
+    WHERE posting_date >= DATE_ADD('month', -12, {end_lit})
+    GROUP BY 1
+    ORDER BY 1
+    """
+    volume_df = run_query(volume_sql)
+    if not volume_df.empty:
+        volume_df['month_str'] = volume_df['month'].dt.strftime('%Y-%m')
+        st.subheader("Invoice Volume & Active Vendors by Month")
+        st.dataframe(volume_df[['month_str', 'invoice_volume', 'active_vendors']].rename(columns={'month_str': 'Month', 'invoice_volume': 'Invoice volume by month', 'active_vendors': 'Active vendors by month'}), use_container_width=True)
+    
+    # Top 10 vendors by spend (YTD) – horizontal bar chart
+    top10_sql = f"""
+    SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
+    FROM {DATABASE}.fact_all_sources_vw f
+    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
+      AND UPPER(f.invoice_status) NOT IN ('CANCELLED','REJECTED')
+    GROUP BY 1
+    ORDER BY spend DESC
+    LIMIT 10
+    """
+    top10_df = run_query(top10_sql)
+    if not top10_df.empty:
+        st.subheader("Top 10 Vendors by Spend (YTD)")
+        bar = alt.Chart(top10_df).mark_bar(color="#1e88e5", cornerRadiusTopLeft=4).encode(
+            x=alt.X("spend:Q", axis=alt.Axis(title="Spend", format="~s")),
+            y=alt.Y("vendor_name:N", sort="-x", axis=alt.Axis(title=None)),
+            tooltip=["vendor_name", alt.Tooltip("spend:Q", format=",.0f")]
+        ).properties(height=300)
+        st.altair_chart(bar, use_container_width=True)
+    
+    st.markdown("---")
+    st.caption("Query outputs")
+    with st.expander("Show full result tables"):
+        st.dataframe(top10_df, use_container_width=True)
+    with st.expander("Show SQL used"):
+        st.code(top10_sql, language="sql")
+    st.chat_input("Ask a question here...", key="genie_followup")
+
+def run_vendor_analysis():
+    st.markdown("## Vendor Analysis")
+    st.info("Vendor analysis is under development. Here is a placeholder. You can ask a specific question in the chat below.")
+    st.chat_input("Ask a question here...", key="genie_vendor")
+
+def run_payment_performance():
+    st.markdown("## Payment Performance")
+    st.info("Payment performance analysis is under development. You can ask a specific question in the chat below.")
+    st.chat_input("Ask a question here...", key="genie_payment")
+
+def run_invoice_aging():
+    st.markdown("## Invoice Aging")
+    st.info("Invoice aging analysis is under development. You can ask a specific question in the chat below.")
+    st.chat_input("Ask a question here...", key="genie_aging")
+
+# ---------------------------- Genie Page (AI Assistant) ----------------------------
+def render_genie():
+    # Check if we have a pre‑filled prompt from Forecast page or from quick buttons
     if "genie_prompt" in st.session_state and st.session_state.genie_prompt:
         prompt = st.session_state.genie_prompt
         st.session_state.genie_prompt = None
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        with st.chat_message("assistant"):
-            with st.spinner("Generating SQL query..."):
-                sql, explanation = generate_sql(prompt)
-                if not sql:
-                    st.error("Failed to generate SQL. Please rephrase your question.")
-                    st.session_state.messages.append({"role": "assistant", "content": "Sorry, I couldn't generate a valid SQL query."})
-                else:
-                    if not is_safe_sql(sql):
-                        st.error("Generated SQL is not a SELECT statement or contains unsafe keywords.")
+        
+        # Handle pre‑defined analyses
+        if prompt == "Spending Overview":
+            run_spending_overview()
+            return
+        elif prompt == "Vendor Analysis":
+            run_vendor_analysis()
+            return
+        elif prompt == "Payment Performance":
+            run_payment_performance()
+            return
+        elif prompt == "Invoice Aging":
+            run_invoice_aging()
+            return
+        else:
+            # Free‑text question – use AI
+            if "messages" not in st.session_state:
+                st.session_state.messages = []
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                with st.spinner("Generating SQL query..."):
+                    sql, explanation = generate_sql(prompt)
+                    if not sql:
+                        st.error("Failed to generate SQL. Please rephrase your question.")
+                        st.session_state.messages.append({"role": "assistant", "content": "Sorry, I couldn't generate a valid SQL query."})
                     else:
-                        sql = ensure_limit(sql)
-                        with st.spinner("Running query on Athena..."):
-                            df = run_query(sql)
-                            if df.empty:
-                                st.warning("The query returned no data.")
-                                st.session_state.messages.append({"role": "assistant", "content": "The query returned no results.", "sql": sql, "df": df})
-                            else:
-                                with st.spinner("Interpreting results..."):
-                                    results_prompt = f"""
+                        if not is_safe_sql(sql):
+                            st.error("Generated SQL is not a SELECT statement or contains unsafe keywords.")
+                        else:
+                            sql = ensure_limit(sql)
+                            with st.spinner("Running query on Athena..."):
+                                df = run_query(sql)
+                                if df.empty:
+                                    st.warning("The query returned no data.")
+                                    st.session_state.messages.append({"role": "assistant", "content": "The query returned no results.", "sql": sql, "df": df})
+                                else:
+                                    with st.spinner("Interpreting results..."):
+                                        results_prompt = f"""
 The user asked: "{prompt}"
 We generated and executed this SQL:
 {sql}
@@ -265,21 +324,65 @@ The query returned the following data (first 5 rows shown):
 
 Please provide a natural language answer to the user's original question based on these results. Be concise, highlight key numbers, and mention any trends or outliers if visible.
 """
-                                    answer = ask_bedrock(results_prompt, system_prompt="You are a helpful data analyst assistant. Answer concisely based only on the provided data.")
-                                    if not answer:
-                                        answer = "I generated the SQL and ran the query, but I could not interpret the results. Here is the data instead."
-                                st.markdown(answer)
-                                with st.expander("🔍 View SQL"):
-                                    st.code(sql, language="sql")
-                                st.dataframe(df, use_container_width=True)
-                                chart = auto_chart(df)
-                                if chart:
-                                    st.altair_chart(chart, use_container_width=True)
-                                st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
-        st.rerun()
+                                        answer = ask_bedrock(results_prompt, system_prompt="You are a helpful data analyst assistant. Answer concisely based only on the provided data.")
+                                        if not answer:
+                                            answer = "I generated the SQL and ran the query, but I could not interpret the results. Here is the data instead."
+                                    st.markdown(answer)
+                                    with st.expander("🔍 View SQL"):
+                                        st.code(sql, language="sql")
+                                    st.dataframe(df, use_container_width=True)
+                                    chart = auto_chart(df)
+                                    if chart:
+                                        st.altair_chart(chart, use_container_width=True)
+                                    st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
+            st.rerun()
     
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    # Welcome screen when no messages exist and no pre‑filled prompt
+    if "messages" not in st.session_state or len(st.session_state.messages) == 0:
+        st.markdown("# Welcome to ProcureIQ Genie")
+        st.markdown("Let Genie run one of these quick analyses for you.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            with st.container():
+                st.markdown("### Spending Overview")
+                st.markdown("Track total spend, monthly trends and major changes")
+                if st.button("Ask Genie", key="btn_spending", use_container_width=True):
+                    st.session_state.genie_prompt = "Spending Overview"
+                    st.rerun()
+        with col2:
+            with st.container():
+                st.markdown("### Vendor Analysis")
+                st.markdown("Understand vendor-wise spend, concentration, and dependency")
+                if st.button("Ask Genie", key="btn_vendor", use_container_width=True):
+                    st.session_state.genie_prompt = "Vendor Analysis"
+                    st.rerun()
+        
+        col3, col4 = st.columns(2)
+        with col3:
+            with st.container():
+                st.markdown("### Payment Performance")
+                st.markdown("Identify delays, late payments, and cycle time issues")
+                if st.button("Ask Genie", key="btn_payment", use_container_width=True):
+                    st.session_state.genie_prompt = "Payment Performance"
+                    st.rerun()
+        with col4:
+            with st.container():
+                st.markdown("### Invoice Aging")
+                st.markdown("See overdue invoices, risk buckets, and problem areas")
+                if st.button("Ask Genie", key="btn_aging", use_container_width=True):
+                    st.session_state.genie_prompt = "Invoice Aging"
+                    st.rerun()
+        
+        # AI Assistant sidebar info
+        with st.sidebar:
+            st.markdown("## AI Assistant")
+            st.markdown("- Saved insights")
+            st.markdown("- Frequently asked by you")
+            st.markdown("- Most frequent (all)")
+        return
+    
+    # Display existing chat messages
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -292,6 +395,7 @@ Please provide a natural language answer to the user's original question based o
                 if chart:
                     st.altair_chart(chart, use_container_width=True)
     
+    # Chat input for new questions
     if prompt := st.chat_input("Ask a question, e.g., 'Show top 5 vendors by spend this year'..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -337,6 +441,7 @@ Please provide a natural language answer to the user's original question based o
                                 st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
         st.rerun()
 
+# ---------------------------- Forecast Page (unchanged except Action Playbook) ----------------------------
 def render_forecast():
     st.subheader("Cash Flow Need Forecast")
     
@@ -361,7 +466,6 @@ def render_forecast():
     """
     cf_df = run_query(cf_sql)
     if not cf_df.empty:
-        # Extract metrics
         total_unpaid = cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"].empty else 0
         overdue_now = cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"].empty else 0
         due_30 = cf_df[cf_df["forecast_bucket"].isin(["DUE_7_DAYS","DUE_14_DAYS","DUE_30_DAYS"])]["total_amount"].sum()
@@ -380,7 +484,6 @@ def render_forecast():
         csv = cf_df.to_csv(index=False).encode('utf-8')
         st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
         
-        # Optional bar chart
         chart_df = cf_df[~cf_df["forecast_bucket"].isin(["TOTAL_UNPAID", "PROCESSING_LAG_DAYS"])].copy()
         if not chart_df.empty:
             st.markdown("---")
@@ -449,6 +552,7 @@ def render_forecast():
     else:
         st.info("No GR/IR summary data")
 
+# ---------------------------- Invoices Page (unchanged from earlier correct version) ----------------------------
 def render_invoices(initial_invoice_number=None):
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
@@ -647,7 +751,7 @@ def render_invoices(initial_invoice_number=None):
     else:
         st.info("No invoices found.")
 
-# ---------------------------- Custom CSS ----------------------------
+# ---------------------------- Dashboard Page (unchanged from earlier correct version) ----------------------------
 def load_custom_css():
     st.markdown("""
     <style>
