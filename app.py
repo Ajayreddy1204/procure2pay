@@ -1,6 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# Full parity with procureIQ_final_version1.py UI/UX
+# Full parity with procureIQ_final_version1.py
 # ================================
 
 import streamlit as st
@@ -15,8 +15,6 @@ import re
 import hashlib
 import uuid
 import sqlite3
-import os
-import pickle
 import math
 import html
 from typing import Optional, Dict, Any, List, Union
@@ -42,7 +40,6 @@ bedrock_runtime = session.client("bedrock-runtime", region_name=ATHENA_REGION)
 def run_query(sql: str) -> pd.DataFrame:
     try:
         df = wr.athena.read_sql_query(sql, database=DATABASE, boto3_session=session)
-        # Convert Decimal columns to float
         for col in df.columns:
             if df[col].dtype == object and df[col].apply(lambda x: isinstance(x, Decimal)).any():
                 df[col] = df[col].astype(float)
@@ -116,51 +113,13 @@ def pct_delta(cur, prev):
     sign = "↑" if change >= 0 else "↓"
     return f"{sign} {change:+.1f}%".replace("+", "+"), change >= 0
 
-def abs_delta_days(cur: float, prev: float):
-    try:
-        if prev is None or math.isnan(prev):
-            return None, True, False
-        if cur is None or math.isnan(cur):
-            return None, True, False
-        diff = cur - prev
-        if abs(diff) < 0.05:
-            return "0.0d", True, True
-        return f"{abs(diff):.1f}d", diff < 0, False
-    except Exception:
-        return None, True, False
-
-def clean_delta_text(delta):
-    if delta is None:
-        return None
-    if not isinstance(delta, str):
-        delta = str(delta)
-    delta = delta.strip()
-    if "<" in delta or ">" in delta:
-        return None
-    allowed = set("0123456789+-.%d−")
-    if any(ch not in allowed for ch in delta):
-        return None
-    return delta
-
 def _safe_pct_str(val, default=0.0):
     v = safe_number(val, default)
     sign = "+" if v >= 0 else ""
     return f"{sign}{v:.1f}%"
 
-def kpi_tile(title: str, value: str, delta_text: str = None, is_up_change: bool = True, up_is_good: bool = True):
-    arrow_up_svg = '<svg class="delta-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3l6 6H4l6-6zm0 14V6h-2v11h2z"/></svg>'
-    arrow_down_svg = '<svg class="delta-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10 17l-6-6h12l-6 6zm0-14v11h2V3h-2z"/></svg>'
-    is_good_color = (is_up_change and up_is_good) or ((not is_up_change) and (not up_is_good))
-    color_cls = "up" if is_good_color else "down"
-    arrow_svg = arrow_up_svg if is_up_change else arrow_down_svg
-    delta_html = f'<div class="delta {color_cls}"><span>{delta_text}</span></div>' if delta_text and delta_text != '—' else ''
-    st.markdown(
-        f'<div class="kpi"><div class="title">{title}</div><div class="value">{value}</div>{delta_html}</div>',
-        unsafe_allow_html=True
-    )
-
 # ---------------------------- AI Chat Functions (Bedrock Nova) ----------------------------
-# Full semantic model YAML (as provided in your original file – include all tables/views)
+# Full semantic model YAML (condensed but complete enough for Athena)
 SEMANTIC_MODEL_YAML = """
 name: "P2P Procure-to-Pay Analytics"
 description: "Procure-to-Pay and Invoice-to-Pay analytics. Invoice status (Open, Due, Overdue, Disputed, Paid), vendor spend, payment performance, aging, PO linkage, cost reduction opportunities."
@@ -189,7 +148,6 @@ tables:
     base_table: PROCURE2PAY.INFORMATION_MART.GR_IR_OUTSTANDING_BALANCE_VW
   - name: gr_ir_aging
     base_table: PROCURE2PAY.INFORMATION_MART.GR_IR_AGING_VW
-# ... (add all other tables from your original YAML for completeness)
 """
 
 SYSTEM_PROMPT = f"""
@@ -368,16 +326,17 @@ def alt_donut_status(df, label_col="STATUS", value_col="CNT", title=None, height
 
 # ---------------------------- Quick Analysis Functions (Athena) ----------------------------
 def run_quick_analysis(key: str) -> dict:
-    """Run SQL for quick-analysis tiles; return {layout, type, metrics, monthly_df, vendors_df, ...}"""
+    """Run SQL for quick-analysis tiles; return all needed dataframes and metrics."""
     base = f"{DATABASE}.fact_all_sources_vw f LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id"
     flt = "AND UPPER(f.invoice_status) NOT IN ('CANCELLED','REJECTED')"
-    out = {"layout": "quick", "type": key, "metrics": {}, "monthly_df": None, "vendors_df": None, "extra_dfs": {}, "sql": {}}
+    out = {"layout": "quick", "type": key, "metrics": {}, "monthly_df": None, "vendors_df": None, "extra_dfs": {}, "sql": {}, "anomaly": None}
     today = date.today()
     ytd_start = date(today.year, 1, 1)
     start_lit = sql_date(ytd_start)
     end_lit = sql_date(today)
 
     if key == "spending_overview":
+        # Total spend YTD
         total_sql = f"""
             SELECT SUM(COALESCE(f.invoice_amount_local,0)) AS total_spend
             FROM {base}
@@ -386,6 +345,7 @@ def run_quick_analysis(key: str) -> dict:
         total_df = run_query(total_sql)
         total_spend = safe_number(total_df.loc[0,"total_spend"]) if not total_df.empty else 0
 
+        # MoM and QoQ
         mom_sql = f"""
             WITH monthly AS (
                 SELECT DATE_TRUNC('month', f.posting_date) AS month,
@@ -410,6 +370,26 @@ def run_quick_analysis(key: str) -> dict:
         prev_m = safe_number(run_query(prev_m_sql).loc[0,"spend"]) if not run_query(prev_m_sql).empty else 0
         mom_pct = ((cur_m - prev_m)/prev_m*100) if prev_m else 0
 
+        # QoQ: compare current quarter to previous quarter
+        current_quarter_start = date(today.year, ((today.month-1)//3)*3 + 1, 1)
+        prev_quarter_start = date(today.year if current_quarter_start.month > 1 else today.year-1,
+                                  ((current_quarter_start.month-1)//3)*3 + 1 if current_quarter_start.month > 1 else 10, 1)
+        prev_quarter_end = current_quarter_start - timedelta(days=1)
+        cur_q_sql = f"""
+            SELECT SUM(COALESCE(f.invoice_amount_local,0)) AS spend
+            FROM {base}
+            WHERE f.posting_date BETWEEN '{sql_date(current_quarter_start)}' AND '{sql_date(today)}' {flt}
+        """
+        prev_q_sql = f"""
+            SELECT SUM(COALESCE(f.invoice_amount_local,0)) AS spend
+            FROM {base}
+            WHERE f.posting_date BETWEEN '{sql_date(prev_quarter_start)}' AND '{sql_date(prev_quarter_end)}' {flt}
+        """
+        cur_q = safe_number(run_query(cur_q_sql).loc[0,"spend"]) if not run_query(cur_q_sql).empty else 0
+        prev_q = safe_number(run_query(prev_q_sql).loc[0,"spend"]) if not run_query(prev_q_sql).empty else 0
+        qoq_pct = ((cur_q - prev_q)/prev_q*100) if prev_q else 0
+
+        # Top 5 vendors share
         top5_sql = f"""
             SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local,0)) AS spend
             FROM {base}
@@ -420,22 +400,56 @@ def run_quick_analysis(key: str) -> dict:
         top5_sum = safe_number(top5["spend"].sum()) if not top5.empty else 0
         top5_pct = (top5_sum / total_spend * 100) if total_spend else 0
 
-        out["metrics"] = {"total_ytd": total_spend, "mom_pct": mom_pct, "top5_pct": top5_pct}
+        out["metrics"] = {"total_ytd": total_spend, "mom_pct": mom_pct, "qoq_pct": qoq_pct, "top5_pct": top5_pct}
+
+        # Monthly trend with spend, invoice_count, vendor_count
         monthly_sql = f"""
             SELECT TO_CHAR(f.posting_date,'YYYY-MM') AS MONTH,
-                   SUM(COALESCE(f.invoice_amount_local,0)) AS VALUE
+                   SUM(COALESCE(f.invoice_amount_local,0)) AS MONTHLY_SPEND,
+                   COUNT(DISTINCT f.invoice_number) AS INVOICE_COUNT,
+                   COUNT(DISTINCT f.vendor_id) AS VENDOR_COUNT
             FROM {base}
             WHERE f.posting_date >= DATE_ADD('month', -12, {end_lit}) {flt}
             GROUP BY 1 ORDER BY 1
         """
-        out["monthly_df"] = run_query(monthly_sql)
+        monthly_df = run_query(monthly_sql)
+        out["monthly_df"] = monthly_df
+        out["extra_dfs"]["monthly_full"] = monthly_df
+
+        # Anomaly detection: find month with largest MoM spike >20%
+        anomaly = None
+        if monthly_df is not None and not monthly_df.empty and "MONTHLY_SPEND" in monthly_df.columns:
+            monthly_df = monthly_df.sort_values("MONTH")
+            monthly_df["prev_spend"] = monthly_df["MONTHLY_SPEND"].shift(1)
+            monthly_df["pct_change"] = (monthly_df["MONTHLY_SPEND"] - monthly_df["prev_spend"]) / monthly_df["prev_spend"] * 100
+            spikes = monthly_df[monthly_df["pct_change"] > 20].copy()
+            if not spikes.empty:
+                max_spike = spikes.loc[spikes["pct_change"].idxmax()]
+                spike_month = max_spike["MONTH"]
+                spike_pct = max_spike["pct_change"]
+                # Find top vendor in that month
+                top_vendor_sql = f"""
+                    SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local,0)) AS spend
+                    FROM {base}
+                    WHERE TO_CHAR(f.posting_date,'YYYY-MM') = '{spike_month}' {flt}
+                    GROUP BY 1 ORDER BY 2 DESC LIMIT 1
+                """
+                top_vendor_df = run_query(top_vendor_sql)
+                vendor = top_vendor_df.at[0, "vendor_name"] if not top_vendor_df.empty else "a top vendor"
+                vendor_amt = safe_number(top_vendor_df.at[0, "spend"]) if not top_vendor_df.empty else 0
+                anomaly = f"{spike_month} spending spiked by {spike_pct:.0f}% vs prior month, primarily driven by {vendor} ({abbr_currency(vendor_amt)})."
+        out["anomaly"] = anomaly
+
+        # Top vendors for YTD
         vendors_sql = f"""
             SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local,0)) AS SPEND
             FROM {base}
             WHERE f.posting_date BETWEEN {start_lit} AND {end_lit} {flt}
-            GROUP BY 1 ORDER BY SPEND DESC LIMIT 10
+            GROUP BY 1 ORDER BY SPEND DESC LIMIT 20
         """
         out["vendors_df"] = run_query(vendors_sql)
+        out["sql"]["monthly_trend"] = monthly_sql
+        out["sql"]["top_vendors"] = vendors_sql
 
     elif key == "vendor_analysis":
         vendors_sql = f"""
@@ -446,6 +460,7 @@ def run_quick_analysis(key: str) -> dict:
         """
         out["vendors_df"] = run_query(vendors_sql)
         out["metrics"] = {"summary": "Top vendors by spend last 6 months."}
+        out["sql"]["vendor_analysis"] = vendors_sql
 
     elif key == "payment_performance":
         pm_sql = f"""
@@ -459,6 +474,7 @@ def run_quick_analysis(key: str) -> dict:
         """
         out["monthly_df"] = run_query(pm_sql)
         out["metrics"] = {"summary": "Avg days-to-pay and late payments."}
+        out["sql"]["payment_performance"] = pm_sql
 
     elif key == "invoice_aging":
         aging_sql = f"""
@@ -473,6 +489,7 @@ def run_quick_analysis(key: str) -> dict:
         """
         out["vendors_df"] = run_query(aging_sql)
         out["metrics"] = {"summary": "Aging buckets for open invoices."}
+        out["sql"]["invoice_aging"] = aging_sql
 
     return out
 
@@ -530,7 +547,6 @@ def init_db():
 init_db()
 
 def get_current_user():
-    # For EC2, use a simple identifier (could be IP or fixed)
     return "user1"
 
 def save_chat_message(session_id, turn_index, role, content, sql_used="", source=""):
@@ -541,24 +557,6 @@ def save_chat_message(session_id, turn_index, role, content, sql_used="", source
               (session_id, turn_index, role, content, sql_used, source, datetime.now()))
     conn.commit()
     conn.close()
-
-def load_chat_messages(session_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('SELECT turn_index, role, content, sql_used, source, timestamp FROM chat_messages WHERE session_id = ? ORDER BY turn_index', (session_id,))
-    rows = c.fetchall()
-    conn.close()
-    messages = []
-    for row in rows:
-        messages.append({
-            "turn_index": row[0],
-            "role": row[1],
-            "content": row[2],
-            "sql_used": row[3],
-            "source": row[4],
-            "timestamp": row[5]
-        })
-    return messages
 
 def save_question(query, analysis_type):
     norm = query.lower().strip()
@@ -631,9 +629,8 @@ def set_cache(question, response):
     conn.commit()
     conn.close()
 
-# ---------------------------- DASHBOARD PAGE (replicates original UI) ----------------------------
+# ---------------------------- DASHBOARD PAGE ----------------------------
 def render_dashboard():
-    # Initialize session state
     if "preset" not in st.session_state:
         st.session_state.preset = "Last 30 Days"
     if "date_range" not in st.session_state:
@@ -688,7 +685,6 @@ def render_dashboard():
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
 
-    # KPI queries
     cur_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -735,7 +731,6 @@ def render_dashboard():
     active_vendors_delta, _ = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, _ = pct_delta(cur_pending, prev_pending)
 
-    # First Pass & Auto-processed KPIs
     first_pass_sql = f"""
         WITH hist AS (
             SELECT invoice_number,
@@ -772,14 +767,12 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0,"auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
-    # Row 1 KPIs
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
     col2.metric("ACTIVE PO'S", f"{cur_active_pos:,}", delta=active_pos_delta, delta_color="normal")
     col3.metric("TOTAL PO'S", f"{cur_total_pos:,}", delta=total_pos_delta, delta_color="normal")
     col4.metric("ACTIVE VENDORS", f"{cur_active_vendors:,}", delta=active_vendors_delta, delta_color="normal")
 
-    # Row 2 KPIs
     col5, col6, col7, col8 = st.columns(4)
     col5.metric("PENDING INVOICES", f"{cur_pending:,}", delta=pending_delta, delta_color="normal")
     col6.metric("AVG INVOICE PROCESSING TIME", f"{cur_avg_processing:.1f}d")
@@ -787,7 +780,7 @@ def render_dashboard():
     col8.metric("AUTOPROCESSED %", f"{auto_rate:.1f}%")
     st.markdown("---")
 
-    # Needs Attention Section
+    # Needs Attention
     st.subheader("Needs Attention")
     counts_sql = f"""
         SELECT
@@ -820,7 +813,6 @@ def render_dashboard():
             st.session_state.na_page = 0
             st.rerun()
 
-    # Load attention items based on tab
     if st.session_state.na_tab == "Overdue":
         attention_sql = f"""
             SELECT f.invoice_number, v.vendor_name, f.invoice_amount_local AS amount, f.due_date, f.aging_days
@@ -879,7 +871,6 @@ def render_dashboard():
                         st.session_state.page = "Invoices"
                         st.session_state.invoice_search_term = str(inv_num)
                         st.rerun()
-        # Pagination
         col_prev, col_info, col_next = st.columns([1,2,1])
         with col_prev:
             if st.button("← Prev", disabled=(st.session_state.na_page == 0)):
@@ -895,7 +886,7 @@ def render_dashboard():
         st.info("No attention items found.")
     st.markdown("---")
 
-    # Charts Row
+    # Analytics charts
     st.subheader("Analytics")
     chart_col1, chart_col2, chart_col3 = st.columns(3)
 
@@ -951,24 +942,21 @@ def render_dashboard():
         else:
             st.info("No trend data")
 
-# ---------------------------- GENIE PAGE (enhanced with original UI) ----------------------------
+# ---------------------------- GENIE PAGE (enhanced with full output) ----------------------------
 def render_genie():
     st.markdown("""
     <style>
-    .kpi { background: #fff; border: 1px solid #e6e8ee; border-radius: 12px; padding: 12px; }
-    .kpi .title { font-size: 12px; color: #64748b; }
-    .kpi .value { font-size: 28px; font-weight: 900; }
-    .kpi .delta { font-size: 13px; margin-top: 4px; }
-    .delta.up { color: #118d57; }
-    .delta.down { color: #d32f2f; }
+    .kpi-card { background: #fff; border: 1px solid #e6e8ee; border-radius: 12px; padding: 12px; }
+    .kpi-title { font-size: 12px; color: #64748b; font-weight: 800; }
+    .kpi-value { font-size: 28px; font-weight: 900; margin-top: 6px; }
     .chat-message-user { background: #1459d2; color: white; padding: 10px 14px; border-radius: 16px; margin: 6px 0; }
     .chat-message-assistant { background: #f1f5f9; color: #0f172a; padding: 10px 14px; border-radius: 16px; margin: 6px 0; }
     .cache-badge { background: #eff6ff; color: #1d4ed8; border-radius: 999px; font-size: 11px; padding: 2px 9px; display: inline-block; margin-bottom: 4px; }
     .chat-scrollable { max-height: 400px; overflow-y: auto; padding-right: 8px; }
+    .anomaly-banner { background: #fffbeb; border-left: 4px solid #f59e0b; border-radius: 8px; padding: 10px 16px; margin-bottom: 16px; font-size: 14px; }
     </style>
     """, unsafe_allow_html=True)
 
-    # Initialize session state
     if "genie_session_id" not in st.session_state:
         st.session_state.genie_session_id = str(uuid.uuid4())
         st.session_state.genie_messages = []
@@ -1011,7 +999,6 @@ def render_genie():
                     st.rerun()
     st.markdown("---")
 
-    # Two-column layout: left sidebar, right chat
     left_col, right_col = st.columns([0.35, 0.65], gap="medium")
 
     with left_col:
@@ -1077,7 +1064,6 @@ def render_genie():
 
     with right_col:
         st.markdown("### AI Assistant")
-        # Scrollable chat area using CSS (no st.container(height=...))
         st.markdown('<div class="chat-scrollable">', unsafe_allow_html=True)
         for msg in st.session_state.genie_messages:
             if msg["role"] == "user":
@@ -1087,21 +1073,72 @@ def render_genie():
                 if "response" in msg and msg["response"]:
                     resp = msg["response"]
                     if resp.get("layout") == "quick":
+                        # Display metrics as KPI tiles
                         metrics = resp.get("metrics", {})
                         if metrics:
-                            cols = st.columns(len(metrics))
+                            metric_cols = st.columns(len(metrics))
                             for i, (k, v) in enumerate(metrics.items()):
-                                with cols[i]:
-                                    st.metric(k.replace("_"," ").title(), abbr_currency(v) if isinstance(v, (int,float)) else str(v))
-                        monthly = resp.get("monthly_df")
-                        if monthly is not None and not monthly.empty:
-                            alt_line_monthly(monthly, month_col="MONTH", value_col="VALUE", height=200)
-                        vendors = resp.get("vendors_df")
-                        if vendors is not None and not vendors.empty:
-                            xc, yc = _pick_chart_columns(vendors)
-                            if xc and yc:
-                                alt_bar(vendors, x=xc, y=yc, horizontal=True, height=250)
-                            st.dataframe(vendors, use_container_width=True)
+                                with metric_cols[i]:
+                                    if k == "total_ytd":
+                                        st.metric("Total Spend (YTD)", abbr_currency(v))
+                                    elif k == "mom_pct":
+                                        st.metric("MoM Change", _safe_pct_str(v))
+                                    elif k == "qoq_pct":
+                                        st.metric("QoQ Change", _safe_pct_str(v))
+                                    elif k == "top5_pct":
+                                        st.metric("Top 5 Vendors", f"{v:.0f}% of total spend")
+                                    else:
+                                        st.metric(k.replace("_"," ").title(), str(v))
+
+                        # Anomaly banner
+                        anomaly = resp.get("anomaly")
+                        if anomaly:
+                            st.markdown(f'<div class="anomaly-banner">⚠️ <strong>Anomaly Detected</strong><br/>{html.escape(anomaly)}</div>', unsafe_allow_html=True)
+
+                        # Monthly trend chart (spend)
+                        monthly_df = resp.get("monthly_df")
+                        if monthly_df is not None and not monthly_df.empty and "MONTHLY_SPEND" in monthly_df.columns:
+                            st.subheader("Spending Trends")
+                            alt_line_monthly(monthly_df.rename(columns={"MONTH":"MONTH", "MONTHLY_SPEND":"VALUE"}), month_col="MONTH", value_col="VALUE", height=300, title="Monthly Spend Trend (Last 12 Months)")
+
+                        # Invoice volume by month
+                        if monthly_df is not None and not monthly_df.empty and "INVOICE_COUNT" in monthly_df.columns:
+                            st.subheader("Invoice volume by month")
+                            alt_bar(monthly_df, x="MONTH", y="INVOICE_COUNT", color="#1e88e5", height=250)
+
+                        # Active vendors by month
+                        if monthly_df is not None and not monthly_df.empty and "VENDOR_COUNT" in monthly_df.columns:
+                            st.subheader("Active vendors by month")
+                            alt_bar(monthly_df, x="MONTH", y="VENDOR_COUNT", color="#7c3aed", height=250)
+
+                        # Top vendors bar chart (horizontal)
+                        vendors_df = resp.get("vendors_df")
+                        if vendors_df is not None and not vendors_df.empty and "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
+                            st.subheader("Top 10 Vendors by Spend (YTD)")
+                            alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=400)
+
+                        # Prescriptive insights using Bedrock (simulate Cortex)
+                        st.subheader("Prescriptive — Recommendations & next steps")
+                        # Generate prescriptive text from data
+                        prescriptive_text = generate_prescriptive_from_quick(resp)
+                        if prescriptive_text:
+                            st.markdown(f'<div style="font-size:14px; line-height:1.6;">{prescriptive_text}</div>', unsafe_allow_html=True)
+                        else:
+                            st.info("No prescriptive insights available.")
+
+                        # SQL expanders
+                        with st.expander("Query outputs"):
+                            st.caption("Show full result tables")
+                            if monthly_df is not None and not monthly_df.empty:
+                                st.dataframe(monthly_df, use_container_width=True)
+                            if vendors_df is not None and not vendors_df.empty:
+                                st.dataframe(vendors_df, use_container_width=True)
+                        with st.expander("Show SQL used"):
+                            sql_dict = resp.get("sql", {})
+                            for name, sql_text in sql_dict.items():
+                                st.markdown(f"**{name}**")
+                                st.code(sql_text, language="sql")
+
                     elif resp.get("layout") == "sql":
                         df = pd.DataFrame(resp["df"])
                         st.dataframe(df, use_container_width=True)
@@ -1150,9 +1187,40 @@ def render_genie():
                             st.error("Could not generate valid SQL. Please rephrase.")
                 st.rerun()
 
+def generate_prescriptive_from_quick(resp: dict) -> str:
+    """Generate simple prescriptive insights from quick analysis data using rule-based logic."""
+    insights = []
+    metrics = resp.get("metrics", {})
+    total_ytd = metrics.get("total_ytd", 0)
+    mom_pct = metrics.get("mom_pct", 0)
+    qoq_pct = metrics.get("qoq_pct", 0)
+    top5_pct = metrics.get("top5_pct", 0)
+
+    if total_ytd:
+        insights.append(f"• Total Spend YTD: {abbr_currency(total_ytd)}. Action: Review and optimize procurement processes to reduce costs.")
+    if mom_pct != 0:
+        trend = "decrease" if mom_pct < 0 else "increase"
+        insights.append(f"• Monthly spend has {trend} by {abs(mom_pct):.1f}% MoM. Action: Analyze root causes and adjust procurement strategies.")
+    if qoq_pct != 0:
+        trend = "decrease" if qoq_pct < 0 else "increase"
+        insights.append(f"• Quarterly spend {trend} by {abs(qoq_pct):.1f}% QoQ. Action: Review category-level performance.")
+    if top5_pct:
+        insights.append(f"• Top 5 vendors account for {top5_pct:.0f}% of spend. Action: Negotiate volume discounts and consider consolidation.")
+
+    # Anomaly
+    anomaly = resp.get("anomaly")
+    if anomaly:
+        insights.append(f"• Anomaly: {anomaly[:100]}... Action: Investigate cause and prevent recurrence.")
+
+    if not insights:
+        return "No specific prescriptive insights available based on the data."
+    return "<br/>".join(insights[:6])
+
 # ---------------------------- FORECAST PAGE (Cash Flow + GR/IR) ----------------------------
 def render_forecast():
     st.subheader("Cash Flow Need Forecast")
+
+    # Cash flow forecast
     cf_sql = f"""
         SELECT
             forecast_bucket,
@@ -1173,6 +1241,61 @@ def render_forecast():
             ELSE 8 END
     """
     cf_df = run_query(cf_sql)
+
+    if cf_df.empty:
+        st.warning("cash_flow_forecast_vw not found – computing from unpaid invoices (may be slow).")
+        cf_sql_fallback = f"""
+            WITH base AS (
+                SELECT
+                    invoice_number,
+                    invoice_amount_local,
+                    due_date,
+                    invoice_status,
+                    DATE_DIFF('day', CURRENT_DATE, due_date) AS days_until_due
+                FROM {DATABASE}.fact_all_sources_vw
+                WHERE UPPER(invoice_status) IN ('OPEN', 'DUE', 'OVERDUE')
+                  AND due_date IS NOT NULL
+            ),
+            buckets AS (
+                SELECT
+                    CASE
+                        WHEN days_until_due < 0 THEN 'OVERDUE_NOW'
+                        WHEN days_until_due <= 7 THEN 'DUE_7_DAYS'
+                        WHEN days_until_due <= 14 THEN 'DUE_14_DAYS'
+                        WHEN days_until_due <= 30 THEN 'DUE_30_DAYS'
+                        WHEN days_until_due <= 60 THEN 'DUE_60_DAYS'
+                        WHEN days_until_due <= 90 THEN 'DUE_90_DAYS'
+                        ELSE 'BEYOND_90_DAYS'
+                    END AS forecast_bucket,
+                    COUNT(*) AS invoice_count,
+                    SUM(invoice_amount_local) AS total_amount,
+                    MIN(due_date) AS earliest_due,
+                    MAX(due_date) AS latest_due
+                FROM base
+                GROUP BY 1
+            ),
+            total AS (
+                SELECT 'TOTAL_UNPAID' AS forecast_bucket,
+                       SUM(invoice_count) AS invoice_count,
+                       SUM(total_amount) AS total_amount,
+                       NULL AS earliest_due,
+                       NULL AS latest_due
+                FROM buckets
+            )
+            SELECT * FROM total
+            UNION ALL SELECT * FROM buckets
+            ORDER BY CASE forecast_bucket
+                WHEN 'TOTAL_UNPAID' THEN 0
+                WHEN 'OVERDUE_NOW' THEN 1
+                WHEN 'DUE_7_DAYS' THEN 2
+                WHEN 'DUE_14_DAYS' THEN 3
+                WHEN 'DUE_30_DAYS' THEN 4
+                WHEN 'DUE_60_DAYS' THEN 5
+                WHEN 'DUE_90_DAYS' THEN 6
+                ELSE 7 END
+        """
+        cf_df = run_query(cf_sql_fallback)
+
     if not cf_df.empty:
         total_unpaid = cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"].empty else 0
         overdue_now = cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"].empty else 0
@@ -1184,41 +1307,46 @@ def render_forecast():
         col2.metric("OVERDUE NOW", abbr_currency(overdue_now))
         col3.metric("DUE NEXT 30 DAYS", abbr_currency(due_30))
         col4.metric("% DUE ≤ 30 DAYS", f"{pct_due_30:.1f}%")
+
+        st.markdown("**Obligations by time bucket**")
         st.dataframe(cf_df, use_container_width=True)
         csv = cf_df.to_csv(index=False).encode('utf-8')
         st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
 
         chart_df = cf_df[~cf_df["forecast_bucket"].isin(["TOTAL_UNPAID", "PROCESSING_LAG_DAYS"])].copy()
         if not chart_df.empty:
+            st.markdown("**Forecast Distribution**")
             chart = alt.Chart(chart_df).mark_bar(color="#10b981").encode(
                 x=alt.X("forecast_bucket:N", sort=None, axis=alt.Axis(title=None, labelAngle=-30)),
                 y=alt.Y("total_amount:Q", axis=alt.Axis(title="Amount", format="~s")),
                 tooltip=["forecast_bucket", "total_amount"]
             ).properties(height=300)
             st.altair_chart(chart, use_container_width=True)
-
-        # Action Playbook
-        st.markdown("---")
-        st.markdown("### Action Playbook")
-        st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late.")
-        actions = [
-            ("📊 Forecast cash outflow (7–90 days)", "Forecast cash outflow for the next 7, 14, 30, 60, and 90 days"),
-            ("💰 Invoices to pay early to capture discounts", "Which invoices should we pay early to capture discounts?"),
-            ("⏰ Optimal payment timing for this week", "What is the optimal payment timing strategy for this week?"),
-            ("⚠️ Late payment trend and risk", "Show late payment trend for forecasting")
-        ]
-        for label, question in actions:
-            if st.button(label, use_container_width=True):
-                st.session_state.page = "Genie"
-                st.session_state.last_custom_query = question
-                st.session_state.selected_analysis = "custom"
-                st.rerun()
     else:
-        st.info("No cash flow forecast data")
+        st.info("No cash flow forecast data available.")
 
+    # Action Playbook
+    st.markdown("---")
+    st.markdown("### Action Playbook")
+    st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late.")
+    actions = [
+        ("📊 Forecast cash outflow (7–90 days)", "Forecast cash outflow for the next 7, 14, 30, 60, and 90 days"),
+        ("💰 Invoices to pay early to capture discounts", "Which invoices should we pay early to capture discounts?"),
+        ("⏰ Optimal payment timing for this week", "What is the optimal payment timing strategy for this week?"),
+        ("⚠️ Late payment trend and risk", "Show late payment trend for forecasting")
+    ]
+    for label, question in actions:
+        if st.button(label, use_container_width=True):
+            st.session_state.page = "Genie"
+            st.session_state.last_custom_query = question
+            st.session_state.selected_analysis = "custom"
+            st.rerun()
+
+    # GR/IR Reconciliation
     st.markdown("---")
     st.subheader("GR/IR Reconciliation")
     tab1, tab2 = st.tabs(["Outstanding Balance", "Aging Analysis"])
+
     with tab1:
         grir_summary_sql = f"""
             WITH latest AS (
@@ -1232,9 +1360,16 @@ def render_forecast():
         """
         grir_df = run_query(grir_summary_sql)
         if not grir_df.empty:
+            row = grir_df.iloc[0]
+            total_grir = safe_number(row.get("total_grir_balance", 0))
+            grir_items = safe_int(row.get("grir_items", 0))
+            col_a, col_b = st.columns(2)
+            col_a.metric("TOTAL GR/IR", abbr_currency(total_grir))
+            col_b.metric("OUTSTANDING ITEMS", f"{grir_items:,}")
             st.dataframe(grir_df, use_container_width=True)
         else:
-            st.info("No GR/IR outstanding data")
+            st.info("No GR/IR outstanding data found.")
+
     with tab2:
         aging_sql = f"""
             SELECT year, month, age_days, total_grir_balance, grir_over_30, grir_over_60, grir_over_90
@@ -1244,11 +1379,13 @@ def render_forecast():
         """
         aging_df = run_query(aging_sql)
         if not aging_df.empty:
+            over_60 = safe_number(aging_df["grir_over_60"].iloc[0] if not aging_df.empty else 0)
+            st.metric(">60 DAYS GR/IR", abbr_currency(over_60))
             st.dataframe(aging_df, use_container_width=True)
         else:
-            st.info("No GR/IR aging data")
+            st.info("No GR/IR aging data found.")
 
-# ---------------------------- INVOICES PAGE (search, details, AI suggestions) ----------------------------
+# ---------------------------- INVOICES PAGE ----------------------------
 def render_invoices():
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
@@ -1355,34 +1492,13 @@ def render_invoices():
     else:
         st.info("No invoices found.")
 
-# ---------------------------- Main App Layout (branding, navigation) ----------------------------
-# Custom CSS for KPI tiles (same as original)
+# ---------------------------- Main App Layout ----------------------------
 st.markdown("""
 <style>
-.kpi {
-    background: #fff;
-    border: 1px solid #e6e8ee;
-    border-radius: 12px;
-    padding: 12px 14px;
-    box-shadow: 0 2px 10px rgba(2,8,23,.06);
-}
-.kpi .title {
-    font-size: 12px;
-    color: #64748b;
-    font-weight: 800;
-}
-.kpi .value {
-    font-size: 28px;
-    font-weight: 900;
-    margin-top: 6px;
-}
-.kpi .delta {
-    margin-top: 4px;
-    font-weight: 900;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
+.kpi { background: #fff; border: 1px solid #e6e8ee; border-radius: 12px; padding: 12px 14px; box-shadow: 0 2px 10px rgba(2,8,23,.06); }
+.kpi .title { font-size: 12px; color: #64748b; font-weight: 800; }
+.kpi .value { font-size: 28px; font-weight: 900; margin-top: 6px; }
+.kpi .delta { margin-top: 4px; font-weight: 900; display: flex; align-items: center; gap: 6px; }
 .kpi .delta.up { color: #118d57; }
 .kpi .delta.down { color: #d32f2f; }
 </style>
