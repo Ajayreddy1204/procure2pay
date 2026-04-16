@@ -102,18 +102,136 @@ def pct_delta(cur, prev):
     sign = "↑" if change >= 0 else "↓"
     return f"{sign} {change:+.1f}%".replace("+", "+"), change >= 0
 
-# ---------------------------- Pre‑defined Analytical Functions for Genie ----------------------------
+# ---------------------------- AI Chat Functions ----------------------------
+SYSTEM_PROMPT = """
+You are an AI assistant that helps users query a procurement database using SQL (Athena/Presto). Given a user's natural language question, generate a valid SQL query for Athena (Presto dialect) based on the following schema.
+
+Tables and views in the `procure2pay` database:
+
+1. `fact_all_sources_vw` – main fact table with invoice and PO data. Columns:
+   - invoice_number, invoice_amount_local, posting_date (DATE), due_date, purchase_order_reference, invoice_status (Open, Due, Overdue, Disputed, Paid, etc.), vendor_id, company_code, plant_code, aging_days, po_amount, po_purpose, payment_date, etc.
+
+2. `dim_vendor_vw` – vendor master data. Columns: vendor_id, vendor_name, vendor_name_2, country_code, city, postal_code, street, region_code, industry_sector, vendor_account_group, tax_number_1, tax_number_2, deletion_flag, posting_block, system.
+
+3. `invoice_status_history_vw` – status change history. Columns: invoice_number, status, effective_date, status_notes, sequence_nbr, posting_date, due_date, vendor_id, invoice_amount_local, payment_date, clearing_document, aging_days, purchase_order_reference, po_amount, po_purpose, document_type, discount_percent, region, system.
+
+4. `cash_flow_unpaid_obligations_vw` – unpaid invoices for cash flow. Columns: document_number, vendor_id, invoice_amount_local, due_date, invoice_status, days_until_due.
+
+5. `payment_processing_cycle_time_vw` – payment cycle metrics. Columns: year, month, avg_payment_cycle_time_days, cleared_invoices.
+
+6. `gr_ir_outstanding_balance_vw` – GR/IR outstanding. Columns: year, month, invoice_count, total_grir_blnc.
+
+7. `gr_ir_aging_vw` – GR/IR aging. Columns: year, month, age_days, total_grir_balance, grir_over_30, grir_over_60, grir_over_90, pct_grir_over_30, pct_grir_over_60, pct_grir_over_90, cnt_grir_over_30, cnt_grir_over_60, cnt_grir_over_90.
+
+8. `dim_company_code_vw` – company codes. Columns: company_code, company_name, street, city, postal_code, country_code, region_code, currency, vat_reg_number, chart_of_accounts, system.
+
+9. `dim_plant_vw` – plant master. Columns: plant_code, plant_name, plant_name_2, company_code, country_code, region_code, city, postal_code, street, system.
+
+Important notes:
+- Use standard Presto/Athena SQL functions (DATE_TRUNC, DATE_ADD, DATE_DIFF, etc.).
+- For date filtering, prefer `posting_date BETWEEN DATE '...' AND DATE '...'`.
+- Always use COALESCE for null amounts.
+- Exclude CANCELLED and REJECTED invoices from spend metrics unless asked.
+- For aggregate queries, always add a reasonable LIMIT (e.g., 100) unless the user asks for all rows.
+- Output only a JSON object with two keys: "sql" containing the SQL query string, and "explanation" containing a brief explanation of what the query does. Do not include any other text.
+"""
+
+def ask_bedrock(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
+    try:
+        body = json.dumps({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"text": prompt}]
+                }
+            ],
+            "system": [{"text": system_prompt}],
+            "inferenceConfig": {
+                "maxTokens": 4096,
+                "temperature": 0.0,
+                "topP": 0.9
+            }
+        })
+        response = bedrock_runtime.invoke_model(
+            modelId=BEDROCK_MODEL_ID,
+            contentType="application/json",
+            accept="application/json",
+            body=body
+        )
+        response_body = json.loads(response['body'].read())
+        return response_body['output']['message']['content'][0]['text']
+    except Exception as e:
+        st.error(f"Bedrock invocation failed: {e}")
+        return ""
+
+def generate_sql(question: str) -> tuple:
+    prompt = f"User question: {question}\n\nGenerate SQL query and explanation as JSON."
+    response = ask_bedrock(prompt)
+    if not response:
+        return None, "Bedrock returned empty response."
+    json_match = re.search(r'\{.*\}$', response, re.DOTALL)
+    json_str = json_match.group(0) if json_match else response
+    try:
+        data = json.loads(json_str)
+        sql = data.get("sql", "").strip()
+        explanation = data.get("explanation", "")
+        return sql, explanation
+    except json.JSONDecodeError as e:
+        st.error(f"Failed to parse JSON: {e}\nResponse: {response}")
+        return None, "Could not parse SQL from AI response."
+
+def is_safe_sql(sql: str) -> bool:
+    sql_lower = sql.lower().strip()
+    if not sql_lower.startswith("select"):
+        return False
+    dangerous = ["insert", "update", "delete", "drop", "alter", "create", "truncate", "grant", "revoke"]
+    for word in dangerous:
+        if re.search(r'\b' + word + r'\b', sql_lower):
+            return False
+    return True
+
+def ensure_limit(sql: str, default_limit: int = 100) -> str:
+    sql_lower = sql.lower()
+    if "limit" in sql_lower:
+        return sql
+    if re.search(r'\b(count|sum|avg|min|max)\b', sql_lower) and "group by" not in sql_lower:
+        return sql
+    return f"{sql.rstrip(';')} LIMIT {default_limit}"
+
+def auto_chart(df: pd.DataFrame) -> Union[alt.Chart, None]:
+    if df.empty or len(df) > 200:
+        return None
+    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+    if not numeric_cols:
+        return None
+    dim_candidates = [c for c in df.columns if c not in numeric_cols]
+    if dim_candidates:
+        dim = dim_candidates[0]
+        if len(numeric_cols) == 1:
+            chart = alt.Chart(df).mark_bar().encode(
+                x=alt.X(dim, sort=None),
+                y=alt.Y(numeric_cols[0]),
+                tooltip=[dim, numeric_cols[0]]
+            )
+        else:
+            melted = df.melt(id_vars=[dim], value_vars=numeric_cols)
+            chart = alt.Chart(melted).mark_line(point=True).encode(
+                x=alt.X(dim, sort=None),
+                y=alt.Y('value', title='Value'),
+                color='variable',
+                tooltip=[dim, 'variable', 'value']
+            )
+        return chart.interactive()
+    return None
+
+# ---------------------------- Genie Page (AI Assistant) ----------------------------
 def run_spending_overview():
-    """Execute queries for Spending Overview and display formatted results."""
     st.markdown("## Spending Overview")
-    
-    # YTD date range
     today = date.today()
     ytd_start = date(today.year, 1, 1)
     start_lit = sql_date(ytd_start)
     end_lit = sql_date(today)
     
-    # Current YTD spend
     cur_spend_sql = f"""
     SELECT SUM(COALESCE(invoice_amount_local, 0)) AS total_spend
     FROM {DATABASE}.fact_all_sources_vw
@@ -122,7 +240,6 @@ def run_spending_overview():
     """
     cur_spend = safe_number(run_query(cur_spend_sql).loc[0, "total_spend"]) if not run_query(cur_spend_sql).empty else 0
     
-    # Previous month (for MoM change)
     last_month_start = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
     last_month_end = today.replace(day=1) - timedelta(days=1)
     prev_spend_sql = f"""
@@ -138,7 +255,6 @@ def run_spending_overview():
     col1.metric("Total Spend (YTD)", abbr_currency(cur_spend))
     col2.metric("MoM Change", f"{mom_change:+.1f}%", delta=f"{mom_change:+.1f}%", delta_color="normal")
     
-    # Top 5 vendors by spend YTD
     top_vendors_sql = f"""
     SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
     FROM {DATABASE}.fact_all_sources_vw f
@@ -157,7 +273,6 @@ def run_spending_overview():
         for _, row in top_df.iterrows():
             st.write(f"- {row['vendor_name']}: {abbr_currency(row['spend'])} ({row['percentage']:.1f}% of total)")
     
-    # Anomaly detection: find month with highest MoM increase in last 12 months
     anomaly_sql = f"""
     WITH monthly AS (
         SELECT 
@@ -187,7 +302,6 @@ def run_spending_overview():
         pct = anomaly_df.iloc[0]['pct_change']
         st.info(f"**Anomaly Detected** – {month} spending spiked by {pct:.0f}% vs prior month.")
     
-    # Monthly spend trend (last 12 months)
     trend_sql = f"""
     SELECT 
         DATE_TRUNC('month', posting_date) AS month,
@@ -208,7 +322,6 @@ def run_spending_overview():
         ).properties(title="Monthly Spend Trend (Last 12 Months)", height=300)
         st.altair_chart(chart, use_container_width=True)
     
-    # Invoice volume and active vendors by month (last 12 months)
     volume_sql = f"""
     SELECT 
         DATE_TRUNC('month', posting_date) AS month,
@@ -225,7 +338,6 @@ def run_spending_overview():
         st.subheader("Invoice Volume & Active Vendors by Month")
         st.dataframe(volume_df[['month_str', 'invoice_volume', 'active_vendors']].rename(columns={'month_str': 'Month', 'invoice_volume': 'Invoice volume by month', 'active_vendors': 'Active vendors by month'}), use_container_width=True)
     
-    # Top 10 vendors by spend (YTD) – horizontal bar chart
     top10_sql = f"""
     SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
     FROM {DATABASE}.fact_all_sources_vw f
@@ -256,7 +368,7 @@ def run_spending_overview():
 
 def run_vendor_analysis():
     st.markdown("## Vendor Analysis")
-    st.info("Vendor analysis is under development. Here is a placeholder. You can ask a specific question in the chat below.")
+    st.info("Vendor analysis is under development. You can ask a specific question in the chat below.")
     st.chat_input("Ask a question here...", key="genie_vendor")
 
 def run_payment_performance():
@@ -269,14 +381,10 @@ def run_invoice_aging():
     st.info("Invoice aging analysis is under development. You can ask a specific question in the chat below.")
     st.chat_input("Ask a question here...", key="genie_aging")
 
-# ---------------------------- Genie Page (AI Assistant) ----------------------------
 def render_genie():
-    # Check if we have a pre‑filled prompt from Forecast page or from quick buttons
     if "genie_prompt" in st.session_state and st.session_state.genie_prompt:
         prompt = st.session_state.genie_prompt
         st.session_state.genie_prompt = None
-        
-        # Handle pre‑defined analyses
         if prompt == "Spending Overview":
             run_spending_overview()
             return
@@ -290,7 +398,6 @@ def render_genie():
             run_invoice_aging()
             return
         else:
-            # Free‑text question – use AI
             if "messages" not in st.session_state:
                 st.session_state.messages = []
             st.session_state.messages.append({"role": "user", "content": prompt})
@@ -337,11 +444,9 @@ Please provide a natural language answer to the user's original question based o
                                     st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
             st.rerun()
     
-    # Welcome screen when no messages exist and no pre‑filled prompt
     if "messages" not in st.session_state or len(st.session_state.messages) == 0:
         st.markdown("# Welcome to ProcureIQ Genie")
         st.markdown("Let Genie run one of these quick analyses for you.")
-        
         col1, col2 = st.columns(2)
         with col1:
             with st.container():
@@ -357,7 +462,6 @@ Please provide a natural language answer to the user's original question based o
                 if st.button("Ask Genie", key="btn_vendor", use_container_width=True):
                     st.session_state.genie_prompt = "Vendor Analysis"
                     st.rerun()
-        
         col3, col4 = st.columns(2)
         with col3:
             with st.container():
@@ -373,8 +477,6 @@ Please provide a natural language answer to the user's original question based o
                 if st.button("Ask Genie", key="btn_aging", use_container_width=True):
                     st.session_state.genie_prompt = "Invoice Aging"
                     st.rerun()
-        
-        # AI Assistant sidebar info
         with st.sidebar:
             st.markdown("## AI Assistant")
             st.markdown("- Saved insights")
@@ -382,7 +484,6 @@ Please provide a natural language answer to the user's original question based o
             st.markdown("- Most frequent (all)")
         return
     
-    # Display existing chat messages
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -395,7 +496,6 @@ Please provide a natural language answer to the user's original question based o
                 if chart:
                     st.altair_chart(chart, use_container_width=True)
     
-    # Chat input for new questions
     if prompt := st.chat_input("Ask a question, e.g., 'Show top 5 vendors by spend this year'..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -441,10 +541,9 @@ Please provide a natural language answer to the user's original question based o
                                 st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
         st.rerun()
 
-# ---------------------------- Forecast Page (unchanged except Action Playbook) ----------------------------
+# ---------------------------- Forecast Page ----------------------------
 def render_forecast():
     st.subheader("Cash Flow Need Forecast")
-    
     cf_sql = """
     SELECT
         forecast_bucket,
@@ -480,7 +579,6 @@ def render_forecast():
         st.markdown("---")
         st.subheader("Obligations by time bucket")
         st.dataframe(cf_df, use_container_width=True)
-        
         csv = cf_df.to_csv(index=False).encode('utf-8')
         st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
         
@@ -499,15 +597,13 @@ def render_forecast():
     
     st.markdown("---")
     st.subheader("Action Playbook")
-    st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late. Each button opens Genie with a pre‑built question wired to the right verified queries.")
-    
+    st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late. Each button opens Genie with a pre‑built question.")
     actions = [
-        ("📊 Forecast cash outflow (7–90 days)", "Forecast cash outflow for the next 7 to 90 days, showing expected payment amounts by week."),
-        ("💰 Invoices to pay early to capture discounts", "List invoices that offer early payment discounts, sorted by discount amount and due date."),
-        ("⏰ Optimal payment timing for this week", "Recommend optimal payment timing for this week based on due dates and discount terms."),
-        ("⚠️ Late payment trend and risk", "Analyze late payment trends over the last 6 months and identify high‑risk vendors.")
+        ("📊 Forecast cash outflow (7–90 days)", "Spending Overview"),
+        ("💰 Invoices to pay early to capture discounts", "Invoices to pay early to capture discounts"),
+        ("⏰ Optimal payment timing for this week", "Optimal payment timing for this week"),
+        ("⚠️ Late payment trend and risk", "Late payment trend and risk")
     ]
-    
     cols = st.columns(2)
     for idx, (label, question) in enumerate(actions):
         with cols[idx % 2]:
@@ -552,11 +648,10 @@ def render_forecast():
     else:
         st.info("No GR/IR summary data")
 
-# ---------------------------- Invoices Page (unchanged from earlier correct version) ----------------------------
+# ---------------------------- Invoices Page ----------------------------
 def render_invoices(initial_invoice_number=None):
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
-
     if initial_invoice_number:
         try:
             clean_num = str(int(float(initial_invoice_number)))
@@ -565,20 +660,14 @@ def render_invoices(initial_invoice_number=None):
         st.session_state.invoice_search_term = clean_num
     else:
         st.session_state.invoice_search_term = st.session_state.get("invoice_search_term", "")
-
     col1, col2 = st.columns([3, 1])
     with col1:
-        search_term = st.text_input("Search by Invoice or PO Number",
-                                    value=st.session_state.invoice_search_term,
-                                    placeholder="e.g., 9000946",
-                                    label_visibility="collapsed",
-                                    key="invoice_search_input")
+        search_term = st.text_input("Search by Invoice or PO Number", value=st.session_state.invoice_search_term, placeholder="e.g., 9000946", label_visibility="collapsed", key="invoice_search_input")
     with col2:
         if st.button("Reset"):
             st.session_state.invoice_search_term = ""
             st.session_state.invoice_status_filter = "All Status"
             st.rerun()
-
     col_vendor, col_status = st.columns(2)
     with col_vendor:
         vendor_list = ["All Vendors"]
@@ -588,13 +677,10 @@ def render_invoices(initial_invoice_number=None):
         selected_vendor = st.selectbox("Vendor", vendor_list)
     with col_status:
         status_options = ["All Status", "OPEN", "PAID", "DISPUTED", "OVERDUE", "DUE_NEXT_30"]
-        selected_status_display = st.selectbox("Status", status_options,
-                                               index=status_options.index(st.session_state.get("invoice_status_filter", "All Status"))
-                                               if st.session_state.get("invoice_status_filter", "All Status") in status_options else 0)
+        selected_status_display = st.selectbox("Status", status_options, index=status_options.index(st.session_state.get("invoice_status_filter", "All Status")) if st.session_state.get("invoice_status_filter", "All Status") in status_options else 0)
         selected_status = selected_status_display
         if selected_status == "DUE_NEXT_30":
             selected_status = "OPEN"
-
     where = []
     if search_term:
         safe_term = search_term.replace("'", "''")
@@ -608,7 +694,6 @@ def render_invoices(initial_invoice_number=None):
         else:
             where.append(f"UPPER(f.invoice_status) = '{selected_status}'")
     where_sql = " AND ".join(where) if where else "1=1"
-
     query = f"""
     SELECT DISTINCT
         f.invoice_number AS invoice_number,
@@ -626,15 +711,7 @@ def render_invoices(initial_invoice_number=None):
     """
     df = run_query(query)
     if not df.empty:
-        df_display = df.rename(columns={
-            'invoice_number': 'INVOICE NUMBER',
-            'vendor_name': 'VENDOR NAME',
-            'posting_date': 'POSTING DATE',
-            'due_date': 'DUE DATE',
-            'invoice_amount': 'INVOICE AMOUNT',
-            'po_number': 'PO NUMBER',
-            'status': 'STATUS'
-        })
+        df_display = df.rename(columns={'invoice_number': 'INVOICE NUMBER','vendor_name': 'VENDOR NAME','posting_date': 'POSTING DATE','due_date': 'DUE DATE','invoice_amount': 'INVOICE AMOUNT','po_number': 'PO NUMBER','status': 'STATUS'})
         st.dataframe(df_display, use_container_width=True, height=400)
         if search_term and len(df) == 1:
             inv_num = df.iloc[0, 0]
@@ -658,18 +735,7 @@ def render_invoices(initial_invoice_number=None):
             """
             details_df = run_query(details_sql)
             if not details_df.empty:
-                details_display = details_df.rename(columns={
-                    'invoice_number': 'INVOICE NUMBER',
-                    'invoice_date': 'INVOICE DATE',
-                    'invoice_amount': 'INVOICE AMOUNT',
-                    'po_number': 'PO NUMBER',
-                    'po_amount': 'PO AMOUNT',
-                    'due_date': 'DUE DATE',
-                    'invoice_status': 'INVOICE STATUS',
-                    'company_code': 'COMPANY CODE',
-                    'fiscal_year': 'FISCAL YEAR',
-                    'aging_days': 'AGING DAYS'
-                })
+                details_display = details_df.rename(columns={'invoice_number': 'INVOICE NUMBER','invoice_date': 'INVOICE DATE','invoice_amount': 'INVOICE AMOUNT','po_number': 'PO NUMBER','po_amount': 'PO AMOUNT','due_date': 'DUE DATE','invoice_status': 'INVOICE STATUS','company_code': 'COMPANY CODE','fiscal_year': 'FISCAL YEAR','aging_days': 'AGING DAYS'})
                 st.dataframe(details_display, use_container_width=True)
             hist_sql = f"""
             SELECT
@@ -684,12 +750,7 @@ def render_invoices(initial_invoice_number=None):
             hist_df = run_query(hist_sql)
             if not hist_df.empty:
                 st.subheader("Status History")
-                hist_display = hist_df.rename(columns={
-                    'invoice_number': 'INVOICE NUMBER',
-                    'status': 'STATUS',
-                    'effective_date': 'EFFECTIVE DATE',
-                    'status_notes': 'STATUS NOTES'
-                })
+                hist_display = hist_df.rename(columns={'invoice_number': 'INVOICE NUMBER','status': 'STATUS','effective_date': 'EFFECTIVE DATE','status_notes': 'STATUS NOTES'})
                 st.dataframe(hist_display, use_container_width=True)
             vendor_info_sql = f"""
             SELECT DISTINCT
@@ -712,20 +773,7 @@ def render_invoices(initial_invoice_number=None):
             vendor_df = run_query(vendor_info_sql)
             if not vendor_df.empty:
                 st.subheader("Vendor Information")
-                vendor_display = vendor_df.rename(columns={
-                    'vendor_id': 'VENDOR ID',
-                    'vendor_name': 'VENDOR NAME',
-                    'vendor_name_2': 'ALIAS / NAME 2',
-                    'country_code': 'COUNTRY',
-                    'city': 'CITY',
-                    'postal_code': 'POSTAL CODE',
-                    'street': 'STREET',
-                    'region_code': 'REGION',
-                    'industry_sector': 'INDUSTRY',
-                    'account_group': 'ACCOUNT GROUP',
-                    'tax_number_1': 'TAX NUMBER 1',
-                    'tax_number_2': 'TAX NUMBER 2'
-                })
+                vendor_display = vendor_df.rename(columns={'vendor_id': 'VENDOR ID','vendor_name': 'VENDOR NAME','vendor_name_2': 'ALIAS / NAME 2','country_code': 'COUNTRY','city': 'CITY','postal_code': 'POSTAL CODE','street': 'STREET','region_code': 'REGION','industry_sector': 'INDUSTRY','account_group': 'ACCOUNT GROUP','tax_number_1': 'TAX NUMBER 1','tax_number_2': 'TAX NUMBER 2'})
                 st.dataframe(vendor_display, use_container_width=True)
             company_sql = f"""
             SELECT DISTINCT
@@ -741,60 +789,30 @@ def render_invoices(initial_invoice_number=None):
             company_df = run_query(company_sql)
             if not company_df.empty:
                 st.subheader("Company & Plant Information")
-                company_display = company_df.rename(columns={
-                    'company_code': 'COMPANY CODE',
-                    'company_name': 'COMPANY NAME',
-                    'plant_code': 'PLANT CODE',
-                    'plant_name': 'PLANT NAME'
-                })
+                company_display = company_df.rename(columns={'company_code': 'COMPANY CODE','company_name': 'COMPANY NAME','plant_code': 'PLANT CODE','plant_name': 'PLANT NAME'})
                 st.dataframe(company_display, use_container_width=True)
     else:
         st.info("No invoices found.")
 
-# ---------------------------- Dashboard Page (unchanged from earlier correct version) ----------------------------
+# ---------------------------- Dashboard Page (abbreviated for brevity, but full) ----------------------------
 def load_custom_css():
     st.markdown("""
     <style>
-    div[data-testid="column"] button {
-        background-color: transparent;
-        border: none;
-        box-shadow: none;
-        padding: 0.25rem 0.5rem;
-        margin: 0;
-        font-weight: bold;
-        width: 100%;
-        text-align: center;
-        border-radius: 8px;
-        transition: background-color 0.2s;
-    }
-    div[data-testid="column"] button:hover {
-        background-color: rgba(0,0,0,0.05);
-        border: none;
-    }
-    div[data-testid="column"] > div:has(button) {
-        margin-top: 0;
-        padding-top: 0;
-    }
+    div[data-testid="column"] button { background-color: transparent; border: none; box-shadow: none; padding: 0.25rem 0.5rem; margin: 0; font-weight: bold; width: 100%; text-align: center; border-radius: 8px; transition: background-color 0.2s; }
+    div[data-testid="column"] button:hover { background-color: rgba(0,0,0,0.05); border: none; }
+    div[data-testid="column"] > div:has(button) { margin-top: 0; padding-top: 0; }
     </style>
     """, unsafe_allow_html=True)
 
 def render_dashboard():
     load_custom_css()
-
     if "preset" not in st.session_state:
         st.session_state.preset = "Last 30 Days"
     if "date_range" not in st.session_state:
         st.session_state.date_range = compute_range_preset(st.session_state.preset)
-
     col_date, col_vendor, col_preset = st.columns([2, 2, 3])
     with col_date:
-        date_range = st.date_input(
-            "Date Range",
-            value=st.session_state.date_range,
-            format="YYYY-MM-DD",
-            label_visibility="collapsed",
-            key="date_picker"
-        )
+        date_range = st.date_input("Date Range", value=st.session_state.date_range, format="YYYY-MM-DD", label_visibility="collapsed", key="date_picker")
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
             new_start, new_end = date_range
         else:
@@ -803,7 +821,6 @@ def render_dashboard():
             st.session_state.date_range = (new_start, new_end)
             st.session_state.preset = "Custom"
             st.rerun()
-
     with col_vendor:
         vendor_sql = f"""
         SELECT DISTINCT v.vendor_name
@@ -816,7 +833,6 @@ def render_dashboard():
         vendors_df = run_query(vendor_sql)
         vendor_list = ["All Vendors"] + vendors_df["vendor_name"].tolist() if not vendors_df.empty else ["All Vendors"]
         selected_vendor = st.selectbox("Vendor", vendor_list, index=0, label_visibility="collapsed")
-
     with col_preset:
         presets = ["Last 30 Days", "QTD", "YTD", "Custom"]
         current_preset = st.session_state.preset
@@ -829,15 +845,12 @@ def render_dashboard():
                     st.session_state.date_range = (new_start, new_end)
                     st.session_state.preset = p
                 st.rerun()
-
     start_lit = sql_date(st.session_state.date_range[0])
     end_lit = sql_date(st.session_state.date_range[1])
     p_start, p_end = prior_window(st.session_state.date_range[0], st.session_state.date_range[1])
     p_start_lit = sql_date(p_start)
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
-
-    # KPI queries
     cur_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -859,7 +872,6 @@ def render_dashboard():
     cur_active_vendors = safe_int(cur_df.loc[0, "active_vendors"]) if not cur_df.empty else 0
     cur_pending = safe_int(cur_df.loc[0, "pending_inv"]) if not cur_df.empty else 0
     cur_avg_processing = safe_number(cur_df.loc[0, "avg_processing_days"]) if not cur_df.empty else 0
-
     prev_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -879,14 +891,11 @@ def render_dashboard():
     prev_total_pos = safe_int(prev_df.loc[0, "total_pos"]) if not prev_df.empty else 0
     prev_active_vendors = safe_int(prev_df.loc[0, "active_vendors"]) if not prev_df.empty else 0
     prev_pending = safe_int(prev_df.loc[0, "pending_inv"]) if not prev_df.empty else 0
-
     spend_delta, _ = pct_delta(cur_spend, prev_spend)
     active_pos_delta, _ = pct_delta(cur_active_pos, prev_active_pos)
     total_pos_delta, _ = pct_delta(cur_total_pos, prev_total_pos)
     active_vendors_delta, _ = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, _ = pct_delta(cur_pending, prev_pending)
-
-    # First pass & auto rates
     first_pass_sql = f"""
     WITH hist AS (
         SELECT invoice_number,
@@ -905,7 +914,6 @@ def render_dashboard():
     total_inv = safe_int(fp_df.loc[0, "total_inv"]) if not fp_df.empty else 0
     fp_inv = safe_int(fp_df.loc[0, "first_pass_inv"]) if not fp_df.empty else 0
     first_pass_rate = (fp_inv / total_inv * 100) if total_inv > 0 else 0
-
     auto_rate_sql = f"""
     WITH paid_invoices AS (
         SELECT invoice_number, status_notes
@@ -922,31 +930,17 @@ def render_dashboard():
     total_cleared = safe_int(auto_df.loc[0, "total_cleared"]) if not auto_df.empty else 0
     auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
-
-    # KPI cards
     col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
-    with col2:
-        st.metric("ACTIVE PO'S", f"{cur_active_pos:,}", delta=active_pos_delta, delta_color="normal")
-    with col3:
-        st.metric("TOTAL PO'S", f"{cur_total_pos:,}", delta=total_pos_delta, delta_color="normal")
-    with col4:
-        st.metric("ACTIVE VENDORS", f"{cur_active_vendors:,}", delta=active_vendors_delta, delta_color="normal")
-
+    col1.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
+    col2.metric("ACTIVE PO'S", f"{cur_active_pos:,}", delta=active_pos_delta, delta_color="normal")
+    col3.metric("TOTAL PO'S", f"{cur_total_pos:,}", delta=total_pos_delta, delta_color="normal")
+    col4.metric("ACTIVE VENDORS", f"{cur_active_vendors:,}", delta=active_vendors_delta, delta_color="normal")
     col5, col6, col7, col8 = st.columns(4)
-    with col5:
-        st.metric("PENDING INVOICES", f"{cur_pending:,}", delta=pending_delta, delta_color="normal")
-    with col6:
-        st.metric("AVG INVOICE PROCESSING TIME", f"{cur_avg_processing:.1f}d")
-    with col7:
-        st.metric("FIRST PASS INVOICES %", f"{first_pass_rate:.1f}%")
-    with col8:
-        st.metric("AUTOPROCESSED %", f"{auto_rate:.1f}%")
-
+    col5.metric("PENDING INVOICES", f"{cur_pending:,}", delta=pending_delta, delta_color="normal")
+    col6.metric("AVG INVOICE PROCESSING TIME", f"{cur_avg_processing:.1f}d")
+    col7.metric("FIRST PASS INVOICES %", f"{first_pass_rate:.1f}%")
+    col8.metric("AUTOPROCESSED %", f"{auto_rate:.1f}%")
     st.markdown("---")
-
-    # Needs Attention
     st.subheader("Needs Attention")
     attention_sql = f"""
     SELECT
@@ -992,9 +986,7 @@ def render_dashboard():
                 st.session_state.invoice_status_filter = "DUE_NEXT_30"
                 st.session_state.attention_page = 0
                 st.rerun()
-
         st.markdown("---")
-
         items_per_page = 10
         total_items = len(attention_df)
         if "attention_page" not in st.session_state:
@@ -1003,7 +995,6 @@ def render_dashboard():
         start_idx = st.session_state.attention_page * items_per_page
         end_idx = min(start_idx + items_per_page, total_items)
         page_df = attention_df.iloc[start_idx:end_idx]
-
         rows = page_df.to_dict('records')
         for i in range(0, len(rows), 5):
             cols = st.columns(5)
@@ -1041,7 +1032,6 @@ def render_dashboard():
                             st.session_state.page = "Invoices"
                             st.session_state.invoice_search_term = clean_inv
                             st.rerun()
-
         col_prev, col_page_info, col_next = st.columns([1, 2, 1])
         with col_prev:
             if st.button("← Prev", disabled=(st.session_state.attention_page == 0)):
@@ -1055,10 +1045,7 @@ def render_dashboard():
                 st.rerun()
     else:
         st.info("No attention items found for the selected period.")
-
     st.markdown("---")
-
-    # Charts
     st.subheader("Analytics")
     status_sql = f"""
     SELECT
@@ -1085,7 +1072,6 @@ def render_dashboard():
         st.altair_chart(pie, use_container_width=True)
     else:
         st.info("No invoice status data")
-
     top_vendors_sql = f"""
     SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
     FROM {DATABASE}.fact_all_sources_vw f
@@ -1108,7 +1094,6 @@ def render_dashboard():
         st.altair_chart(bar, use_container_width=True)
     else:
         st.info("No vendor spend data")
-
     trend_sql = f"""
     WITH monthly_data AS (
         SELECT
@@ -1135,8 +1120,7 @@ def render_dashboard():
     """
     trend_df = run_query(trend_sql)
     if not trend_df.empty:
-        trend_long = trend_df.melt(id_vars=["month"], value_vars=["actual", "forecast"],
-                                   var_name="type", value_name="amount")
+        trend_long = trend_df.melt(id_vars=["month"], value_vars=["actual", "forecast"], var_name="type", value_name="amount")
         line = alt.Chart(trend_long).mark_line(point=True).encode(
             x=alt.X("month:N", axis=alt.Axis(title=None, labelAngle=-45)),
             y=alt.Y("amount:Q", axis=alt.Axis(title="Spend", format="~s")),
@@ -1149,7 +1133,6 @@ def render_dashboard():
 
 # ---------------------------- Main App Layout ----------------------------
 logo_url = "https://th.bing.com/th/id/OIP.Vy1yFQtg8-D1SsAxcqqtSgHaE6?w=235&h=180&c=7&r=0&o=7&dpr=1.5&pid=1.7&rm=3"
-
 col_title, col_nav, col_logo = st.columns([1, 3, 1])
 with col_title:
     st.markdown("<h1 style='font-weight: bold; margin-bottom: 0;'>procure2pay</h1>", unsafe_allow_html=True)
@@ -1173,13 +1156,10 @@ with col_nav:
             st.rerun()
 with col_logo:
     st.image(logo_url, width=50)
-
 st.markdown("<p style='font-size: 0.9rem; color: gray; margin-top: -0.5rem;'>p2pAnalytics</p>", unsafe_allow_html=True)
 st.markdown("---")
-
 if "page" not in st.session_state:
     st.session_state.page = "Dashboard"
-
 if st.session_state.page == "Dashboard":
     render_dashboard()
 elif st.session_state.page == "Genie":
