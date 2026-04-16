@@ -267,11 +267,10 @@ def run_spending_overview():
     """
     top_df = run_query(top_vendors_sql)
     if not top_df.empty:
-        total_spend = top_df['spend'].sum()
-        top_df['percentage'] = (top_df['spend'] / cur_spend * 100).round(1) if cur_spend > 0 else 0
         st.markdown("**Top 5 Vendors**")
         for _, row in top_df.iterrows():
-            st.write(f"- {row['vendor_name']}: {abbr_currency(row['spend'])} ({row['percentage']:.1f}% of total)")
+            pct = (row['spend'] / cur_spend * 100) if cur_spend > 0 else 0
+            st.write(f"- {row['vendor_name']}: {abbr_currency(row['spend'])} ({pct:.1f}% of total)")
     
     anomaly_sql = f"""
     WITH monthly AS (
@@ -298,6 +297,7 @@ def run_spending_overview():
     """
     anomaly_df = run_query(anomaly_sql)
     if not anomaly_df.empty:
+        anomaly_df['month'] = pd.to_datetime(anomaly_df['month'])
         month = anomaly_df.iloc[0]['month'].strftime('%Y-%m')
         pct = anomaly_df.iloc[0]['pct_change']
         st.info(f"**Anomaly Detected** – {month} spending spiked by {pct:.0f}% vs prior month.")
@@ -314,6 +314,7 @@ def run_spending_overview():
     """
     trend_df = run_query(trend_sql)
     if not trend_df.empty:
+        trend_df['month'] = pd.to_datetime(trend_df['month'])
         trend_df['month_str'] = trend_df['month'].dt.strftime('%b %Y')
         chart = alt.Chart(trend_df).mark_line(point=True, color="#1e88e5").encode(
             x=alt.X("month_str:N", sort=None, axis=alt.Axis(title=None, labelAngle=-45)),
@@ -334,9 +335,12 @@ def run_spending_overview():
     """
     volume_df = run_query(volume_sql)
     if not volume_df.empty:
+        volume_df['month'] = pd.to_datetime(volume_df['month'])
         volume_df['month_str'] = volume_df['month'].dt.strftime('%Y-%m')
         st.subheader("Invoice Volume & Active Vendors by Month")
-        st.dataframe(volume_df[['month_str', 'invoice_volume', 'active_vendors']].rename(columns={'month_str': 'Month', 'invoice_volume': 'Invoice volume by month', 'active_vendors': 'Active vendors by month'}), use_container_width=True)
+        st.dataframe(volume_df[['month_str', 'invoice_volume', 'active_vendors']].rename(
+            columns={'month_str': 'Month', 'invoice_volume': 'Invoice volume by month', 'active_vendors': 'Active vendors by month'}
+        ), use_container_width=True)
     
     top10_sql = f"""
     SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
@@ -711,7 +715,15 @@ def render_invoices(initial_invoice_number=None):
     """
     df = run_query(query)
     if not df.empty:
-        df_display = df.rename(columns={'invoice_number': 'INVOICE NUMBER','vendor_name': 'VENDOR NAME','posting_date': 'POSTING DATE','due_date': 'DUE DATE','invoice_amount': 'INVOICE AMOUNT','po_number': 'PO NUMBER','status': 'STATUS'})
+        df_display = df.rename(columns={
+            'invoice_number': 'INVOICE NUMBER',
+            'vendor_name': 'VENDOR NAME',
+            'posting_date': 'POSTING DATE',
+            'due_date': 'DUE DATE',
+            'invoice_amount': 'INVOICE AMOUNT',
+            'po_number': 'PO NUMBER',
+            'status': 'STATUS'
+        })
         st.dataframe(df_display, use_container_width=True, height=400)
         if search_term and len(df) == 1:
             inv_num = df.iloc[0, 0]
@@ -735,7 +747,18 @@ def render_invoices(initial_invoice_number=None):
             """
             details_df = run_query(details_sql)
             if not details_df.empty:
-                details_display = details_df.rename(columns={'invoice_number': 'INVOICE NUMBER','invoice_date': 'INVOICE DATE','invoice_amount': 'INVOICE AMOUNT','po_number': 'PO NUMBER','po_amount': 'PO AMOUNT','due_date': 'DUE DATE','invoice_status': 'INVOICE STATUS','company_code': 'COMPANY CODE','fiscal_year': 'FISCAL YEAR','aging_days': 'AGING DAYS'})
+                details_display = details_df.rename(columns={
+                    'invoice_number': 'INVOICE NUMBER',
+                    'invoice_date': 'INVOICE DATE',
+                    'invoice_amount': 'INVOICE AMOUNT',
+                    'po_number': 'PO NUMBER',
+                    'po_amount': 'PO AMOUNT',
+                    'due_date': 'DUE DATE',
+                    'invoice_status': 'INVOICE STATUS',
+                    'company_code': 'COMPANY CODE',
+                    'fiscal_year': 'FISCAL YEAR',
+                    'aging_days': 'AGING DAYS'
+                })
                 st.dataframe(details_display, use_container_width=True)
             hist_sql = f"""
             SELECT
@@ -750,7 +773,12 @@ def render_invoices(initial_invoice_number=None):
             hist_df = run_query(hist_sql)
             if not hist_df.empty:
                 st.subheader("Status History")
-                hist_display = hist_df.rename(columns={'invoice_number': 'INVOICE NUMBER','status': 'STATUS','effective_date': 'EFFECTIVE DATE','status_notes': 'STATUS NOTES'})
+                hist_display = hist_df.rename(columns={
+                    'invoice_number': 'INVOICE NUMBER',
+                    'status': 'STATUS',
+                    'effective_date': 'EFFECTIVE DATE',
+                    'status_notes': 'STATUS NOTES'
+                })
                 st.dataframe(hist_display, use_container_width=True)
             vendor_info_sql = f"""
             SELECT DISTINCT
@@ -773,7 +801,20 @@ def render_invoices(initial_invoice_number=None):
             vendor_df = run_query(vendor_info_sql)
             if not vendor_df.empty:
                 st.subheader("Vendor Information")
-                vendor_display = vendor_df.rename(columns={'vendor_id': 'VENDOR ID','vendor_name': 'VENDOR NAME','vendor_name_2': 'ALIAS / NAME 2','country_code': 'COUNTRY','city': 'CITY','postal_code': 'POSTAL CODE','street': 'STREET','region_code': 'REGION','industry_sector': 'INDUSTRY','account_group': 'ACCOUNT GROUP','tax_number_1': 'TAX NUMBER 1','tax_number_2': 'TAX NUMBER 2'})
+                vendor_display = vendor_df.rename(columns={
+                    'vendor_id': 'VENDOR ID',
+                    'vendor_name': 'VENDOR NAME',
+                    'vendor_name_2': 'ALIAS / NAME 2',
+                    'country_code': 'COUNTRY',
+                    'city': 'CITY',
+                    'postal_code': 'POSTAL CODE',
+                    'street': 'STREET',
+                    'region_code': 'REGION',
+                    'industry_sector': 'INDUSTRY',
+                    'account_group': 'ACCOUNT GROUP',
+                    'tax_number_1': 'TAX NUMBER 1',
+                    'tax_number_2': 'TAX NUMBER 2'
+                })
                 st.dataframe(vendor_display, use_container_width=True)
             company_sql = f"""
             SELECT DISTINCT
@@ -789,12 +830,17 @@ def render_invoices(initial_invoice_number=None):
             company_df = run_query(company_sql)
             if not company_df.empty:
                 st.subheader("Company & Plant Information")
-                company_display = company_df.rename(columns={'company_code': 'COMPANY CODE','company_name': 'COMPANY NAME','plant_code': 'PLANT CODE','plant_name': 'PLANT NAME'})
+                company_display = company_df.rename(columns={
+                    'company_code': 'COMPANY CODE',
+                    'company_name': 'COMPANY NAME',
+                    'plant_code': 'PLANT CODE',
+                    'plant_name': 'PLANT NAME'
+                })
                 st.dataframe(company_display, use_container_width=True)
     else:
         st.info("No invoices found.")
 
-# ---------------------------- Dashboard Page (abbreviated for brevity, but full) ----------------------------
+# ---------------------------- Dashboard Page ----------------------------
 def load_custom_css():
     st.markdown("""
     <style>
@@ -851,6 +897,7 @@ def render_dashboard():
     p_start_lit = sql_date(p_start)
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
+    
     cur_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -872,6 +919,7 @@ def render_dashboard():
     cur_active_vendors = safe_int(cur_df.loc[0, "active_vendors"]) if not cur_df.empty else 0
     cur_pending = safe_int(cur_df.loc[0, "pending_inv"]) if not cur_df.empty else 0
     cur_avg_processing = safe_number(cur_df.loc[0, "avg_processing_days"]) if not cur_df.empty else 0
+    
     prev_kpi_sql = f"""
     SELECT
         COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
@@ -891,11 +939,13 @@ def render_dashboard():
     prev_total_pos = safe_int(prev_df.loc[0, "total_pos"]) if not prev_df.empty else 0
     prev_active_vendors = safe_int(prev_df.loc[0, "active_vendors"]) if not prev_df.empty else 0
     prev_pending = safe_int(prev_df.loc[0, "pending_inv"]) if not prev_df.empty else 0
+    
     spend_delta, _ = pct_delta(cur_spend, prev_spend)
     active_pos_delta, _ = pct_delta(cur_active_pos, prev_active_pos)
     total_pos_delta, _ = pct_delta(cur_total_pos, prev_total_pos)
     active_vendors_delta, _ = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, _ = pct_delta(cur_pending, prev_pending)
+    
     first_pass_sql = f"""
     WITH hist AS (
         SELECT invoice_number,
@@ -914,6 +964,7 @@ def render_dashboard():
     total_inv = safe_int(fp_df.loc[0, "total_inv"]) if not fp_df.empty else 0
     fp_inv = safe_int(fp_df.loc[0, "first_pass_inv"]) if not fp_df.empty else 0
     first_pass_rate = (fp_inv / total_inv * 100) if total_inv > 0 else 0
+    
     auto_rate_sql = f"""
     WITH paid_invoices AS (
         SELECT invoice_number, status_notes
@@ -930,17 +981,20 @@ def render_dashboard():
     total_cleared = safe_int(auto_df.loc[0, "total_cleared"]) if not auto_df.empty else 0
     auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
+    
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
     col2.metric("ACTIVE PO'S", f"{cur_active_pos:,}", delta=active_pos_delta, delta_color="normal")
     col3.metric("TOTAL PO'S", f"{cur_total_pos:,}", delta=total_pos_delta, delta_color="normal")
     col4.metric("ACTIVE VENDORS", f"{cur_active_vendors:,}", delta=active_vendors_delta, delta_color="normal")
+    
     col5, col6, col7, col8 = st.columns(4)
     col5.metric("PENDING INVOICES", f"{cur_pending:,}", delta=pending_delta, delta_color="normal")
     col6.metric("AVG INVOICE PROCESSING TIME", f"{cur_avg_processing:.1f}d")
     col7.metric("FIRST PASS INVOICES %", f"{first_pass_rate:.1f}%")
     col8.metric("AUTOPROCESSED %", f"{auto_rate:.1f}%")
     st.markdown("---")
+    
     st.subheader("Needs Attention")
     attention_sql = f"""
     SELECT
@@ -1046,6 +1100,7 @@ def render_dashboard():
     else:
         st.info("No attention items found for the selected period.")
     st.markdown("---")
+    
     st.subheader("Analytics")
     status_sql = f"""
     SELECT
@@ -1072,6 +1127,7 @@ def render_dashboard():
         st.altair_chart(pie, use_container_width=True)
     else:
         st.info("No invoice status data")
+    
     top_vendors_sql = f"""
     SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local, 0)) AS spend
     FROM {DATABASE}.fact_all_sources_vw f
@@ -1094,6 +1150,7 @@ def render_dashboard():
         st.altair_chart(bar, use_container_width=True)
     else:
         st.info("No vendor spend data")
+    
     trend_sql = f"""
     WITH monthly_data AS (
         SELECT
@@ -1158,8 +1215,10 @@ with col_logo:
     st.image(logo_url, width=50)
 st.markdown("<p style='font-size: 0.9rem; color: gray; margin-top: -0.5rem;'>p2pAnalytics</p>", unsafe_allow_html=True)
 st.markdown("---")
+
 if "page" not in st.session_state:
     st.session_state.page = "Dashboard"
+
 if st.session_state.page == "Dashboard":
     render_dashboard()
 elif st.session_state.page == "Genie":
