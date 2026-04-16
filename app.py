@@ -102,7 +102,7 @@ def pct_delta(cur, prev):
     sign = "↑" if change >= 0 else "↓"
     return f"{sign} {change:+.1f}%".replace("+", "+"), change >= 0
 
-# ---------------------------- AI Chat Functions (unchanged) ----------------------------
+# ---------------------------- AI Chat Functions ----------------------------
 SYSTEM_PROMPT = """
 You are an AI assistant that helps users query a procurement database using SQL (Athena/Presto). Given a user's natural language question, generate a valid SQL query for Athena (Presto dialect) based on the following schema.
 
@@ -229,7 +229,6 @@ def render_genie():
     st.subheader("🤖 YashNovaAI – Genie")
     st.markdown("Ask any question about your procurement data in plain English. The AI will generate SQL, run it on Athena, and explain the results.")
     
-    # Check for pre‑filled prompt from Forecast page
     if "genie_prompt" in st.session_state and st.session_state.genie_prompt:
         prompt = st.session_state.genie_prompt
         st.session_state.genie_prompt = None
@@ -279,7 +278,6 @@ Please provide a natural language answer to the user's original question based o
                                 st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
         st.rerun()
     
-    # Display existing messages
     if "messages" not in st.session_state:
         st.session_state.messages = []
     for msg in st.session_state.messages:
@@ -294,7 +292,6 @@ Please provide a natural language answer to the user's original question based o
                 if chart:
                     st.altair_chart(chart, use_container_width=True)
     
-    # Chat input
     if prompt := st.chat_input("Ask a question, e.g., 'Show top 5 vendors by spend this year'..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -423,7 +420,6 @@ def render_forecast():
         csv = cf_df.to_csv(index=False).encode('utf-8')
         st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
         
-        # Optional bar chart
         chart_df = cf_df[~cf_df["forecast_bucket"].isin(["TOTAL_UNPAID", "PROCESSING_LAG_DAYS"])].copy()
         if not chart_df.empty:
             st.markdown("---")
@@ -496,7 +492,6 @@ def render_invoices(initial_invoice_number=None):
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
 
-    # Clean invoice number if passed (remove .0)
     if initial_invoice_number:
         try:
             clean_num = str(int(float(initial_invoice_number)))
@@ -538,7 +533,6 @@ def render_invoices(initial_invoice_number=None):
     where = []
     if search_term:
         safe_term = search_term.replace("'", "''")
-        # CAST to VARCHAR to avoid decimal/string mismatch
         where.append(f"CAST(f.invoice_number AS VARCHAR) = '{safe_term}'")
     if selected_vendor != "All Vendors":
         safe_vendor = selected_vendor.replace("'", "''")
@@ -552,13 +546,13 @@ def render_invoices(initial_invoice_number=None):
 
     query = f"""
     SELECT DISTINCT
-        f.invoice_number AS "INVOICE NUMBER",
-        v.vendor_name AS "VENDOR NAME",
-        f.posting_date AS "POSTING DATE",
-        f.due_date AS "DUE DATE",
-        f.invoice_amount_local AS "INVOICE AMOUNT",
-        f.purchase_order_reference AS "PO NUMBER",
-        UPPER(f.invoice_status) AS "STATUS"
+        f.invoice_number AS invoice_number,
+        v.vendor_name AS vendor_name,
+        f.posting_date AS posting_date,
+        f.due_date AS due_date,
+        f.invoice_amount_local AS invoice_amount,
+        f.purchase_order_reference AS po_number,
+        UPPER(f.invoice_status) AS status
     FROM {DATABASE}.fact_all_sources_vw f
     LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
     WHERE {where_sql}
@@ -567,36 +561,58 @@ def render_invoices(initial_invoice_number=None):
     """
     df = run_query(query)
     if not df.empty:
-        st.dataframe(df, use_container_width=True, height=400)
+        # Rename columns for display
+        df_display = df.rename(columns={
+            'invoice_number': 'INVOICE NUMBER',
+            'vendor_name': 'VENDOR NAME',
+            'posting_date': 'POSTING DATE',
+            'due_date': 'DUE DATE',
+            'invoice_amount': 'INVOICE AMOUNT',
+            'po_number': 'PO NUMBER',
+            'status': 'STATUS'
+        })
+        st.dataframe(df_display, use_container_width=True, height=400)
         if search_term and len(df) == 1:
-            inv_num = df.iloc[0]["INVOICE NUMBER"]
+            inv_num = df.iloc[0, 0]  # first column (invoice_number)
             st.markdown("---")
             st.subheader(f"Invoice Details: {inv_num}")
             details_sql = f"""
             SELECT
-                f.invoice_number AS "INVOICE NUMBER",
-                f.posting_date AS "INVOICE DATE",
-                f.invoice_amount_local AS "INVOICE AMOUNT",
-                f.purchase_order_reference AS "PO NUMBER",
-                f.po_amount AS "PO AMOUNT",
-                f.due_date AS "DUE DATE",
-                f.status AS "INVOICE STATUS",
-                f.company_code AS "COMPANY CODE",
-                f.fiscal_year AS "FISCAL YEAR",
-                f.aging_days AS "AGING DAYS"
+                f.invoice_number AS invoice_number,
+                f.posting_date AS invoice_date,
+                f.invoice_amount_local AS invoice_amount,
+                f.purchase_order_reference AS po_number,
+                f.po_amount AS po_amount,
+                f.due_date AS due_date,
+                f.status AS invoice_status,
+                f.company_code AS company_code,
+                f.fiscal_year AS fiscal_year,
+                f.aging_days AS aging_days
             FROM {DATABASE}.fact_all_sources_vw f
             WHERE CAST(f.invoice_number AS VARCHAR) = '{inv_num}'
             LIMIT 1
             """
             details_df = run_query(details_sql)
             if not details_df.empty:
-                st.dataframe(details_df, use_container_width=True)
+                details_display = details_df.rename(columns={
+                    'invoice_number': 'INVOICE NUMBER',
+                    'invoice_date': 'INVOICE DATE',
+                    'invoice_amount': 'INVOICE AMOUNT',
+                    'po_number': 'PO NUMBER',
+                    'po_amount': 'PO AMOUNT',
+                    'due_date': 'DUE DATE',
+                    'invoice_status': 'INVOICE STATUS',
+                    'company_code': 'COMPANY CODE',
+                    'fiscal_year': 'FISCAL YEAR',
+                    'aging_days': 'AGING DAYS'
+                })
+                st.dataframe(details_display, use_container_width=True)
             hist_sql = f"""
             SELECT
-                invoice_number AS "INVOICE NUMBER",
-                UPPER(status) AS "STATUS",
-                effective_date AS "EFFECTIVE DATE",
-                status_notes AS "STATUS NOTES"
+                invoice_number AS invoice_number,
+                UPPER(status) AS status,
+                effective_date AS effective_date,
+                status_notes AS status_notes
             FROM {DATABASE}.invoice_status_history_vw
             WHERE CAST(invoice_number AS VARCHAR) = '{inv_num}'
             ORDER BY sequence_nbr
@@ -604,21 +620,27 @@ def render_invoices(initial_invoice_number=None):
             hist_df = run_query(hist_sql)
             if not hist_df.empty:
                 st.subheader("Status History")
-                st.dataframe(hist_df, use_container_width=True)
+                hist_display = hist_df.rename(columns={
+                    'invoice_number': 'INVOICE NUMBER',
+                    'status': 'STATUS',
+                    'effective_date': 'EFFECTIVE DATE',
+                    'status_notes': 'STATUS NOTES'
+                })
+                st.dataframe(hist_display, use_container_width=True)
             vendor_info_sql = f"""
             SELECT DISTINCT
-                v.vendor_id AS "VENDOR ID",
-                v.vendor_name AS "VENDOR NAME",
-                v.vendor_name_2 AS "ALIAS / NAME 2",
-                v.country_code AS "COUNTRY",
-                v.city AS "CITY",
-                v.postal_code AS "POSTAL CODE",
-                v.street AS "STREET",
-                v.region_code AS "REGION",
-                v.industry_sector AS "INDUSTRY",
-                v.vendor_account_group AS "ACCOUNT GROUP",
-                v.tax_number_1 AS "TAX NUMBER 1",
-                v.tax_number_2 AS "TAX NUMBER 2"
+                v.vendor_id AS vendor_id,
+                v.vendor_name AS vendor_name,
+                v.vendor_name_2 AS vendor_name_2,
+                v.country_code AS country_code,
+                v.city AS city,
+                v.postal_code AS postal_code,
+                v.street AS street,
+                v.region_code AS region_code,
+                v.industry_sector AS industry_sector,
+                v.vendor_account_group AS account_group,
+                v.tax_number_1 AS tax_number_1,
+                v.tax_number_2 AS tax_number_2
             FROM {DATABASE}.fact_all_sources_vw f
             LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
             WHERE CAST(f.invoice_number AS VARCHAR) = '{inv_num}'
@@ -626,13 +648,27 @@ def render_invoices(initial_invoice_number=None):
             vendor_df = run_query(vendor_info_sql)
             if not vendor_df.empty:
                 st.subheader("Vendor Information")
-                st.dataframe(vendor_df, use_container_width=True)
+                vendor_display = vendor_df.rename(columns={
+                    'vendor_id': 'VENDOR ID',
+                    'vendor_name': 'VENDOR NAME',
+                    'vendor_name_2': 'ALIAS / NAME 2',
+                    'country_code': 'COUNTRY',
+                    'city': 'CITY',
+                    'postal_code': 'POSTAL CODE',
+                    'street': 'STREET',
+                    'region_code': 'REGION',
+                    'industry_sector': 'INDUSTRY',
+                    'account_group': 'ACCOUNT GROUP',
+                    'tax_number_1': 'TAX NUMBER 1',
+                    'tax_number_2': 'TAX NUMBER 2'
+                })
+                st.dataframe(vendor_display, use_container_width=True)
             company_sql = f"""
             SELECT DISTINCT
-                f.company_code AS "COMPANY CODE",
-                COALESCE(cc.company_name, 'N/A') AS "COMPANY NAME",
-                f.plant_code AS "PLANT CODE",
-                COALESCE(plt.plant_name, 'N/A') AS "PLANT NAME"
+                f.company_code AS company_code,
+                COALESCE(cc.company_name, 'N/A') AS company_name,
+                f.plant_code AS plant_code,
+                COALESCE(plt.plant_name, 'N/A') AS plant_name
             FROM {DATABASE}.fact_all_sources_vw f
             LEFT JOIN {DATABASE}.dim_company_code_vw cc ON f.company_code = cc.company_code
             LEFT JOIN {DATABASE}.dim_plant_vw plt ON f.plant_code = plt.plant_code
@@ -641,7 +677,13 @@ def render_invoices(initial_invoice_number=None):
             company_df = run_query(company_sql)
             if not company_df.empty:
                 st.subheader("Company & Plant Information")
-                st.dataframe(company_df, use_container_width=True)
+                company_display = company_df.rename(columns={
+                    'company_code': 'COMPANY CODE',
+                    'company_name': 'COMPANY NAME',
+                    'plant_code': 'PLANT CODE',
+                    'plant_name': 'PLANT NAME'
+                })
+                st.dataframe(company_display, use_container_width=True)
     else:
         st.info("No invoices found.")
 
@@ -680,7 +722,6 @@ def render_dashboard():
     if "date_range" not in st.session_state:
         st.session_state.date_range = compute_range_preset(st.session_state.preset)
 
-    # Filters row
     col_date, col_vendor, col_preset = st.columns([2, 2, 3])
     with col_date:
         date_range = st.date_input(
@@ -841,7 +882,7 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # Needs Attention section
+    # Needs Attention
     st.subheader("Needs Attention")
     attention_sql = f"""
     SELECT
@@ -928,7 +969,6 @@ def render_dashboard():
                             <div style="font-size: 0.7rem; margin-bottom: 0.5rem;">Due: {due_date}</div>
                         </div>
                         """, unsafe_allow_html=True)
-                        # Clean invoice number for navigation
                         try:
                             clean_inv = str(int(float(inv_num)))
                         except:
@@ -954,7 +994,7 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # Charts section
+    # Charts
     st.subheader("Analytics")
     status_sql = f"""
     SELECT
