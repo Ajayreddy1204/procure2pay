@@ -102,7 +102,7 @@ def pct_delta(cur, prev):
     sign = "↑" if change >= 0 else "↓"
     return f"{sign} {change:+.1f}%".replace("+", "+"), change >= 0
 
-# ---------------------------- AI Chat Functions ----------------------------
+# ---------------------------- AI Chat Functions (unchanged) ----------------------------
 SYSTEM_PROMPT = """
 You are an AI assistant that helps users query a procurement database using SQL (Athena/Presto). Given a user's natural language question, generate a valid SQL query for Athena (Presto dialect) based on the following schema.
 
@@ -341,54 +341,13 @@ def render_forecast():
     st.subheader("Cash Flow Need Forecast")
     
     cf_sql = """
-    WITH base AS (
-        SELECT document_number, vendor_id, invoice_amount_local, due_date, invoice_status, days_until_due
-        FROM procure2pay.cash_flow_unpaid_obligations_vw
-    ),
-    cycle_time AS (
-        SELECT avg_payment_cycle_time_days AS lag_days
-        FROM procure2pay.payment_processing_cycle_time_vw
-        ORDER BY year DESC, month DESC
-        LIMIT 1
-    ),
-    buckets AS (
-        SELECT
-            CASE
-                WHEN days_until_due < 0 THEN 'OVERDUE_NOW'
-                WHEN days_until_due <= 7 THEN 'DUE_7_DAYS'
-                WHEN days_until_due <= 14 THEN 'DUE_14_DAYS'
-                WHEN days_until_due <= 30 THEN 'DUE_30_DAYS'
-                WHEN days_until_due <= 60 THEN 'DUE_60_DAYS'
-                WHEN days_until_due <= 90 THEN 'DUE_90_DAYS'
-                ELSE 'BEYOND_90_DAYS'
-            END AS forecast_bucket,
-            COUNT(*) AS invoice_count,
-            SUM(invoice_amount_local) AS total_amount,
-            MIN(due_date) AS earliest_due,
-            MAX(due_date) AS latest_due
-        FROM base
-        GROUP BY 1
-    ),
-    summary AS (
-        SELECT 'TOTAL_UNPAID' AS forecast_bucket,
-               SUM(invoice_count) AS invoice_count,
-               SUM(total_amount) AS total_amount,
-               NULL AS earliest_due,
-               NULL AS latest_due
-        FROM buckets
-    ),
-    processing_note AS (
-        SELECT 'PROCESSING_LAG_DAYS' AS forecast_bucket,
-               (SELECT lag_days FROM cycle_time) AS invoice_count,
-               NULL AS total_amount,
-               NULL AS earliest_due,
-               NULL AS latest_due
-    )
-    SELECT * FROM summary
-    UNION ALL
-    SELECT * FROM buckets
-    UNION ALL
-    SELECT * FROM processing_note
+    SELECT
+        forecast_bucket,
+        invoice_count,
+        total_amount,
+        earliest_due,
+        latest_due
+    FROM procure2pay.cash_flow_forecast_vw
     ORDER BY CASE forecast_bucket
         WHEN 'TOTAL_UNPAID' THEN 0
         WHEN 'OVERDUE_NOW' THEN 1
@@ -402,6 +361,7 @@ def render_forecast():
     """
     cf_df = run_query(cf_sql)
     if not cf_df.empty:
+        # Extract metrics
         total_unpaid = cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"].empty else 0
         overdue_now = cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"].empty else 0
         due_30 = cf_df[cf_df["forecast_bucket"].isin(["DUE_7_DAYS","DUE_14_DAYS","DUE_30_DAYS"])]["total_amount"].sum()
@@ -420,6 +380,7 @@ def render_forecast():
         csv = cf_df.to_csv(index=False).encode('utf-8')
         st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
         
+        # Optional bar chart
         chart_df = cf_df[~cf_df["forecast_bucket"].isin(["TOTAL_UNPAID", "PROCESSING_LAG_DAYS"])].copy()
         if not chart_df.empty:
             st.markdown("---")
@@ -561,7 +522,6 @@ def render_invoices(initial_invoice_number=None):
     """
     df = run_query(query)
     if not df.empty:
-        # Rename columns for display
         df_display = df.rename(columns={
             'invoice_number': 'INVOICE NUMBER',
             'vendor_name': 'VENDOR NAME',
@@ -573,7 +533,7 @@ def render_invoices(initial_invoice_number=None):
         })
         st.dataframe(df_display, use_container_width=True, height=400)
         if search_term and len(df) == 1:
-            inv_num = df.iloc[0, 0]  # first column (invoice_number)
+            inv_num = df.iloc[0, 0]
             st.markdown("---")
             st.subheader(f"Invoice Details: {inv_num}")
             details_sql = f"""
@@ -584,7 +544,7 @@ def render_invoices(initial_invoice_number=None):
                 f.purchase_order_reference AS po_number,
                 f.po_amount AS po_amount,
                 f.due_date AS due_date,
-                f.status AS invoice_status,
+                f.invoice_status AS invoice_status,
                 f.company_code AS company_code,
                 f.fiscal_year AS fiscal_year,
                 f.aging_days AS aging_days
