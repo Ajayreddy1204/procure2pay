@@ -23,12 +23,10 @@ ATHENA_REGION = "us-east-1"
 BEDROCK_MODEL_ID = "amazon.nova-micro-v1:0"
 
 session = boto3.Session()
+athena_client = session.client("athena", region_name=ATHENA_REGION)
 bedrock_runtime = session.client("bedrock-runtime", region_name=ATHENA_REGION)
 
-# ---------------------------- Cached query function ----------------------------
-@st.cache_data(ttl=300, show_spinner=False)
 def run_query(sql: str) -> pd.DataFrame:
-    """Execute SQL on Athena with caching."""
     try:
         df = wr.athena.read_sql_query(sql, database=DATABASE, boto3_session=session)
         for col in df.columns:
@@ -36,7 +34,7 @@ def run_query(sql: str) -> pd.DataFrame:
                 df[col] = df[col].astype(float)
         return df
     except Exception as e:
-        st.error(f"Athena query failed: {e}\nSQL: {sql[:300]}")
+        st.error(f"Athena query failed: {e}\nSQL: {sql[:500]}")
         return pd.DataFrame()
 
 # ---------------------------- Helper functions ----------------------------
@@ -384,136 +382,31 @@ def run_invoice_aging():
     st.info("Invoice aging analysis is under development. You can ask a specific question in the chat below.")
 
 def render_genie():
-    # Two‑column layout: left for content, right for AI Assistant panel
-    left_col, right_col = st.columns([2, 1])
-    
-    with right_col:
+    # Sidebar for AI Assistant
+    with st.sidebar:
         st.markdown("## AI Assistant")
         st.markdown("- Saved insights")
         st.markdown("- Frequently asked by you")
         st.markdown("- Most frequent (all)")
         st.markdown("---")
-        st.markdown("##### AI Assistant")
-        st.button("+", key="ai_assistant_plus", help="AI Assistant (placeholder)")
         st.markdown("### Start a Conversation")
         st.markdown("Ask questions about your Procurement to Pay data, or select a pre-built analysis from the library.")
-        # Chat input is placed here
-        prompt = st.chat_input("Ask a question here...", key="genie_chat_input")
     
-    with left_col:
-        # Check if there is a pending prompt from Forecast or from quick buttons
-        if "genie_prompt" in st.session_state and st.session_state.genie_prompt:
-            prompt = st.session_state.genie_prompt
-            st.session_state.genie_prompt = None
-            if prompt == "Spending Overview":
-                run_spending_overview()
-            elif prompt == "Vendor Analysis":
-                run_vendor_analysis()
-            elif prompt == "Payment Performance":
-                run_payment_performance()
-            elif prompt == "Invoice Aging":
-                run_invoice_aging()
-            else:
-                # Free‑text question – add to messages and process
-                if "messages" not in st.session_state:
-                    st.session_state.messages = []
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-                with st.chat_message("assistant"):
-                    with st.spinner("Generating SQL query..."):
-                        sql, explanation = generate_sql(prompt)
-                        if not sql:
-                            st.error("Failed to generate SQL. Please rephrase your question.")
-                            st.session_state.messages.append({"role": "assistant", "content": "Sorry, I couldn't generate a valid SQL query."})
-                        else:
-                            if not is_safe_sql(sql):
-                                st.error("Generated SQL is not a SELECT statement or contains unsafe keywords.")
-                            else:
-                                sql = ensure_limit(sql)
-                                with st.spinner("Running query on Athena..."):
-                                    df = run_query(sql)
-                                    if df.empty:
-                                        st.warning("The query returned no data.")
-                                        st.session_state.messages.append({"role": "assistant", "content": "The query returned no results.", "sql": sql, "df": df})
-                                    else:
-                                        with st.spinner("Interpreting results..."):
-                                            results_prompt = f"""
-The user asked: "{prompt}"
-We generated and executed this SQL:
-{sql}
-
-The query returned the following data (first 5 rows shown):
-{df.head(5).to_string()}
-
-Please provide a natural language answer to the user's original question based on these results. Be concise, highlight key numbers, and mention any trends or outliers if visible.
-"""
-                                            answer = ask_bedrock(results_prompt, system_prompt="You are a helpful data analyst assistant. Answer concisely based only on the provided data.")
-                                            if not answer:
-                                                answer = "I generated the SQL and ran the query, but I could not interpret the results. Here is the data instead."
-                                        st.markdown(answer)
-                                        with st.expander("🔍 View SQL"):
-                                            st.code(sql, language="sql")
-                                        st.dataframe(df, use_container_width=True)
-                                        chart = auto_chart(df)
-                                        if chart:
-                                            st.altair_chart(chart, use_container_width=True)
-                                        st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
-                st.rerun()
-        
-        # If there are no messages and no pending prompt, show the welcome screen with four cards
-        if "messages" not in st.session_state or len(st.session_state.messages) == 0:
-            st.markdown("# Welcome to ProcureIQ Genie")
-            st.markdown("Let Genie run one of these quick analyses for you.")
-            col1, col2 = st.columns(2)
-            with col1:
-                with st.container():
-                    st.markdown("### Spending Overview")
-                    st.markdown("Track total spend, monthly trends and major changes")
-                    if st.button("Ask Genie", key="btn_spending", use_container_width=True):
-                        st.session_state.genie_prompt = "Spending Overview"
-                        st.rerun()
-            with col2:
-                with st.container():
-                    st.markdown("### Vendor Analysis")
-                    st.markdown("Understand vendor-wise spend, concentration, and dependency")
-                    if st.button("Ask Genie", key="btn_vendor", use_container_width=True):
-                        st.session_state.genie_prompt = "Vendor Analysis"
-                        st.rerun()
-            col3, col4 = st.columns(2)
-            with col3:
-                with st.container():
-                    st.markdown("### Payment Performance")
-                    st.markdown("Identify delays, late payments, and cycle time issues")
-                    if st.button("Ask Genie", key="btn_payment", use_container_width=True):
-                        st.session_state.genie_prompt = "Payment Performance"
-                        st.rerun()
-            with col4:
-                with st.container():
-                    st.markdown("### Invoice Aging")
-                    st.markdown("See overdue invoices, risk buckets, and problem areas")
-                    if st.button("Ask Genie", key="btn_aging", use_container_width=True):
-                        st.session_state.genie_prompt = "Invoice Aging"
-                        st.rerun()
-            st.markdown("---")
-        
-        # Display existing chat messages (if any)
-        if "messages" in st.session_state and len(st.session_state.messages) > 0:
-            for msg in st.session_state.messages:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-                    if "sql" in msg:
-                        with st.expander("🔍 View SQL"):
-                            st.code(msg["sql"], language="sql")
-                    if "df" in msg and msg["df"] is not None and not msg["df"].empty:
-                        st.dataframe(msg["df"], use_container_width=True)
-                        chart = auto_chart(msg["df"])
-                        if chart:
-                            st.altair_chart(chart, use_container_width=True)
-            st.markdown("---")
-        
-        # Process chat input from right column if provided
-        if 'prompt' in locals() and prompt:
+    # Main area
+    # Check if there is a pending prompt from Forecast or from quick buttons
+    if "genie_prompt" in st.session_state and st.session_state.genie_prompt:
+        prompt = st.session_state.genie_prompt
+        st.session_state.genie_prompt = None
+        if prompt == "Spending Overview":
+            run_spending_overview()
+        elif prompt == "Vendor Analysis":
+            run_vendor_analysis()
+        elif prompt == "Payment Performance":
+            run_payment_performance()
+        elif prompt == "Invoice Aging":
+            run_invoice_aging()
+        else:
+            # Free‑text question – add to messages and process
             if "messages" not in st.session_state:
                 st.session_state.messages = []
             st.session_state.messages.append({"role": "user", "content": prompt})
@@ -558,7 +451,111 @@ Please provide a natural language answer to the user's original question based o
                                     if chart:
                                         st.altair_chart(chart, use_container_width=True)
                                     st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
-            st.rerun()
+        # After handling the prompt, we may still need to show the chat input below. We'll just return to avoid double rendering.
+        # But we also want to show the chat input. So we will not return; instead we let the rest of the function run to display the chat input.
+        # However, we must avoid showing the welcome screen again. We'll check if messages exist or if we just ran an analysis.
+        # For simplicity, after running a pre‑defined analysis, we still show the chat input (which is at the end of this function).
+        # So we do not return.
+    
+    # If there are no messages and no pending prompt, show the welcome screen with four cards
+    if "messages" not in st.session_state or len(st.session_state.messages) == 0:
+        st.markdown("# Welcome to ProcureIQ Genie")
+        st.markdown("Let Genie run one of these quick analyses for you.")
+        col1, col2 = st.columns(2)
+        with col1:
+            with st.container():
+                st.markdown("### Spending Overview")
+                st.markdown("Track total spend, monthly trends and major changes")
+                if st.button("Ask Genie", key="btn_spending", use_container_width=True):
+                    st.session_state.genie_prompt = "Spending Overview"
+                    st.rerun()
+        with col2:
+            with st.container():
+                st.markdown("### Vendor Analysis")
+                st.markdown("Understand vendor-wise spend, concentration, and dependency")
+                if st.button("Ask Genie", key="btn_vendor", use_container_width=True):
+                    st.session_state.genie_prompt = "Vendor Analysis"
+                    st.rerun()
+        col3, col4 = st.columns(2)
+        with col3:
+            with st.container():
+                st.markdown("### Payment Performance")
+                st.markdown("Identify delays, late payments, and cycle time issues")
+                if st.button("Ask Genie", key="btn_payment", use_container_width=True):
+                    st.session_state.genie_prompt = "Payment Performance"
+                    st.rerun()
+        with col4:
+            with st.container():
+                st.markdown("### Invoice Aging")
+                st.markdown("See overdue invoices, risk buckets, and problem areas")
+                if st.button("Ask Genie", key="btn_aging", use_container_width=True):
+                    st.session_state.genie_prompt = "Invoice Aging"
+                    st.rerun()
+        # Divider before chat input
+        st.markdown("---")
+    
+    # Display existing chat messages (if any)
+    if "messages" in st.session_state and len(st.session_state.messages) > 0:
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if "sql" in msg:
+                    with st.expander("🔍 View SQL"):
+                        st.code(msg["sql"], language="sql")
+                if "df" in msg and msg["df"] is not None and not msg["df"].empty:
+                    st.dataframe(msg["df"], use_container_width=True)
+                    chart = auto_chart(msg["df"])
+                    if chart:
+                        st.altair_chart(chart, use_container_width=True)
+        st.markdown("---")
+    
+    # Persistent chat input for free‑text questions
+    if prompt := st.chat_input("Ask a question here..."):
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        with st.chat_message("assistant"):
+            with st.spinner("Generating SQL query..."):
+                sql, explanation = generate_sql(prompt)
+                if not sql:
+                    st.error("Failed to generate SQL. Please rephrase your question.")
+                    st.session_state.messages.append({"role": "assistant", "content": "Sorry, I couldn't generate a valid SQL query."})
+                else:
+                    if not is_safe_sql(sql):
+                        st.error("Generated SQL is not a SELECT statement or contains unsafe keywords.")
+                    else:
+                        sql = ensure_limit(sql)
+                        with st.spinner("Running query on Athena..."):
+                            df = run_query(sql)
+                            if df.empty:
+                                st.warning("The query returned no data.")
+                                st.session_state.messages.append({"role": "assistant", "content": "The query returned no results.", "sql": sql, "df": df})
+                            else:
+                                with st.spinner("Interpreting results..."):
+                                    results_prompt = f"""
+The user asked: "{prompt}"
+We generated and executed this SQL:
+{sql}
+
+The query returned the following data (first 5 rows shown):
+{df.head(5).to_string()}
+
+Please provide a natural language answer to the user's original question based on these results. Be concise, highlight key numbers, and mention any trends or outliers if visible.
+"""
+                                    answer = ask_bedrock(results_prompt, system_prompt="You are a helpful data analyst assistant. Answer concisely based only on the provided data.")
+                                    if not answer:
+                                        answer = "I generated the SQL and ran the query, but I could not interpret the results. Here is the data instead."
+                                st.markdown(answer)
+                                with st.expander("🔍 View SQL"):
+                                    st.code(sql, language="sql")
+                                st.dataframe(df, use_container_width=True)
+                                chart = auto_chart(df)
+                                if chart:
+                                    st.altair_chart(chart, use_container_width=True)
+                                st.session_state.messages.append({"role": "assistant", "content": answer, "sql": sql, "df": df})
+        st.rerun()
 
 # ---------------------------- Forecast Page ----------------------------
 def render_forecast():
@@ -913,42 +910,21 @@ def render_dashboard():
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
     
-    # Use caching for KPI queries (they depend on date range and vendor)
-    @st.cache_data(ttl=300, show_spinner=False)
-    def get_kpis(start, end, p_start, p_end, vendor_where):
-        cur_kpi_sql = f"""
-        SELECT
-            COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
-            COUNT(DISTINCT purchase_order_reference) AS total_pos,
-            COUNT(DISTINCT v.vendor_name) AS active_vendors,
-            SUM(CASE WHEN UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
-                     THEN COALESCE(invoice_amount_local, 0) ELSE 0 END) AS total_spend,
-            COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN invoice_number END) AS pending_inv,
-            AVG(CASE WHEN UPPER(invoice_status) = 'PAID' THEN DATE_DIFF('day', posting_date, payment_date) END) AS avg_processing_days
-        FROM {DATABASE}.fact_all_sources_vw f
-        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-        WHERE f.posting_date BETWEEN {start} AND {end}
-        {vendor_where}
-        """
-        cur_df = run_query(cur_kpi_sql)
-        prev_kpi_sql = f"""
-        SELECT
-            COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
-            COUNT(DISTINCT purchase_order_reference) AS total_pos,
-            COUNT(DISTINCT v.vendor_name) AS active_vendors,
-            SUM(CASE WHEN UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
-                     THEN COALESCE(invoice_amount_local, 0) ELSE 0 END) AS total_spend,
-            COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN invoice_number END) AS pending_inv
-        FROM {DATABASE}.fact_all_sources_vw f
-        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-        WHERE f.posting_date BETWEEN {p_start} AND {p_end}
-        {vendor_where}
-        """
-        prev_df = run_query(prev_kpi_sql)
-        return cur_df, prev_df
-    
-    cur_df, prev_df = get_kpis(start_lit, end_lit, p_start_lit, p_end_lit, vendor_where)
-    
+    cur_kpi_sql = f"""
+    SELECT
+        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
+        COUNT(DISTINCT purchase_order_reference) AS total_pos,
+        COUNT(DISTINCT v.vendor_name) AS active_vendors,
+        SUM(CASE WHEN UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
+                 THEN COALESCE(invoice_amount_local, 0) ELSE 0 END) AS total_spend,
+        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN invoice_number END) AS pending_inv,
+        AVG(CASE WHEN UPPER(invoice_status) = 'PAID' THEN DATE_DIFF('day', posting_date, payment_date) END) AS avg_processing_days
+    FROM {DATABASE}.fact_all_sources_vw f
+    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+    WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
+    {vendor_where}
+    """
+    cur_df = run_query(cur_kpi_sql)
     cur_spend = safe_number(cur_df.loc[0, "total_spend"]) if not cur_df.empty else 0
     cur_active_pos = safe_int(cur_df.loc[0, "active_pos"]) if not cur_df.empty else 0
     cur_total_pos = safe_int(cur_df.loc[0, "total_pos"]) if not cur_df.empty else 0
@@ -956,6 +932,20 @@ def render_dashboard():
     cur_pending = safe_int(cur_df.loc[0, "pending_inv"]) if not cur_df.empty else 0
     cur_avg_processing = safe_number(cur_df.loc[0, "avg_processing_days"]) if not cur_df.empty else 0
     
+    prev_kpi_sql = f"""
+    SELECT
+        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN purchase_order_reference END) AS active_pos,
+        COUNT(DISTINCT purchase_order_reference) AS total_pos,
+        COUNT(DISTINCT v.vendor_name) AS active_vendors,
+        SUM(CASE WHEN UPPER(invoice_status) NOT IN ('CANCELLED','REJECTED')
+                 THEN COALESCE(invoice_amount_local, 0) ELSE 0 END) AS total_spend,
+        COUNT(DISTINCT CASE WHEN UPPER(invoice_status) = 'OPEN' THEN invoice_number END) AS pending_inv
+    FROM {DATABASE}.fact_all_sources_vw f
+    LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+    WHERE f.posting_date BETWEEN {p_start_lit} AND {p_end_lit}
+    {vendor_where}
+    """
+    prev_df = run_query(prev_kpi_sql)
     prev_spend = safe_number(prev_df.loc[0, "total_spend"]) if not prev_df.empty else 0
     prev_active_pos = safe_int(prev_df.loc[0, "active_pos"]) if not prev_df.empty else 0
     prev_total_pos = safe_int(prev_df.loc[0, "total_pos"]) if not prev_df.empty else 0
@@ -968,47 +958,41 @@ def render_dashboard():
     active_vendors_delta, _ = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, _ = pct_delta(cur_pending, prev_pending)
     
-    # First pass & auto rates (also cacheable)
-    @st.cache_data(ttl=300, show_spinner=False)
-    def get_metrics(start, end):
-        first_pass_sql = f"""
-        WITH hist AS (
-            SELECT invoice_number,
-                   MAX(CASE WHEN UPPER(status) IN ('PAID','CLEARED','CLOSED','POSTED','SETTLED') THEN 1 ELSE 0 END) AS has_paid,
-                   MAX(CASE WHEN UPPER(status) IN ('DISPUTE','DISPUTED','OVERDUE') THEN 1 ELSE 0 END) AS has_issue
-            FROM {DATABASE}.invoice_status_history_vw
-            WHERE posting_date BETWEEN {start} AND {end}
-            GROUP BY invoice_number
-        )
-        SELECT
-            COUNT(*) AS total_inv,
-            SUM(CASE WHEN has_paid = 1 AND has_issue = 0 THEN 1 ELSE 0 END) AS first_pass_inv
-        FROM hist
-        """
-        fp_df = run_query(first_pass_sql)
-        total_inv = safe_int(fp_df.loc[0, "total_inv"]) if not fp_df.empty else 0
-        fp_inv = safe_int(fp_df.loc[0, "first_pass_inv"]) if not fp_df.empty else 0
-        first_pass_rate = (fp_inv / total_inv * 100) if total_inv > 0 else 0
-        
-        auto_rate_sql = f"""
-        WITH paid_invoices AS (
-            SELECT invoice_number, status_notes
-            FROM {DATABASE}.invoice_status_history_vw
-            WHERE posting_date BETWEEN {start} AND {end}
-              AND UPPER(status) = 'PAID'
-        )
-        SELECT
-            COUNT(*) AS total_cleared,
-            SUM(CASE WHEN UPPER(status_notes) = 'AUTO PROCESSED' THEN 1 ELSE 0 END) AS auto_processed
-        FROM paid_invoices
-        """
-        auto_df = run_query(auto_rate_sql)
-        total_cleared = safe_int(auto_df.loc[0, "total_cleared"]) if not auto_df.empty else 0
-        auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
-        auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
-        return first_pass_rate, auto_rate
+    first_pass_sql = f"""
+    WITH hist AS (
+        SELECT invoice_number,
+               MAX(CASE WHEN UPPER(status) IN ('PAID','CLEARED','CLOSED','POSTED','SETTLED') THEN 1 ELSE 0 END) AS has_paid,
+               MAX(CASE WHEN UPPER(status) IN ('DISPUTE','DISPUTED','OVERDUE') THEN 1 ELSE 0 END) AS has_issue
+        FROM {DATABASE}.invoice_status_history_vw
+        WHERE posting_date BETWEEN {start_lit} AND {end_lit}
+        GROUP BY invoice_number
+    )
+    SELECT
+        COUNT(*) AS total_inv,
+        SUM(CASE WHEN has_paid = 1 AND has_issue = 0 THEN 1 ELSE 0 END) AS first_pass_inv
+    FROM hist
+    """
+    fp_df = run_query(first_pass_sql)
+    total_inv = safe_int(fp_df.loc[0, "total_inv"]) if not fp_df.empty else 0
+    fp_inv = safe_int(fp_df.loc[0, "first_pass_inv"]) if not fp_df.empty else 0
+    first_pass_rate = (fp_inv / total_inv * 100) if total_inv > 0 else 0
     
-    first_pass_rate, auto_rate = get_metrics(start_lit, end_lit)
+    auto_rate_sql = f"""
+    WITH paid_invoices AS (
+        SELECT invoice_number, status_notes
+        FROM {DATABASE}.invoice_status_history_vw
+        WHERE posting_date BETWEEN {start_lit} AND {end_lit}
+          AND UPPER(status) = 'PAID'
+    )
+    SELECT
+        COUNT(*) AS total_cleared,
+        SUM(CASE WHEN UPPER(status_notes) = 'AUTO PROCESSED' THEN 1 ELSE 0 END) AS auto_processed
+    FROM paid_invoices
+    """
+    auto_df = run_query(auto_rate_sql)
+    total_cleared = safe_int(auto_df.loc[0, "total_cleared"]) if not auto_df.empty else 0
+    auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
+    auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
     
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
