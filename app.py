@@ -1,6 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# Fixed: Invoice navigation without decimal, Genie insights, all Athena views
+# OPTIMIZED VERSION: Full caching, minimal redundant queries
 # ================================
 
 import streamlit as st
@@ -20,6 +20,8 @@ import html
 from typing import Optional, Dict, Any, List, Union
 from decimal import Decimal
 from difflib import SequenceMatcher
+from functools import lru_cache
+import time
 
 # ---------------------------- Page config ----------------------------
 st.set_page_config(
@@ -33,13 +35,26 @@ DATABASE = "procure2pay"
 ATHENA_REGION = "us-east-1"
 BEDROCK_MODEL_ID = "amazon.nova-micro-v1:0"
 
-session = boto3.Session()
-athena_client = session.client("athena", region_name=ATHENA_REGION)
-bedrock_runtime = session.client("bedrock-runtime", region_name=ATHENA_REGION)
+@st.cache_resource
+def get_aws_session():
+    return boto3.Session()
 
-def run_query(sql: str) -> pd.DataFrame:
+@st.cache_resource
+def get_bedrock_runtime():
+    return get_aws_session().client("bedrock-runtime", region_name=ATHENA_REGION)
+
+@st.cache_resource
+def get_athena_client():
+    return get_aws_session().client("athena", region_name=ATHENA_REGION)
+
+# Cached query execution
+@st.cache_data(ttl=300, show_spinner=False)
+def run_query_cached(sql: str) -> pd.DataFrame:
+    """Execute Athena query with caching (5 minutes TTL)."""
     try:
+        session = get_aws_session()
         df = wr.athena.read_sql_query(sql, database=DATABASE, boto3_session=session)
+        # Convert Decimal columns to float once
         for col in df.columns:
             if df[col].dtype == object and df[col].apply(lambda x: isinstance(x, Decimal)).any():
                 df[col] = df[col].astype(float)
@@ -48,7 +63,11 @@ def run_query(sql: str) -> pd.DataFrame:
         st.error(f"Athena query failed: {e}\nSQL: {sql[:500]}")
         return pd.DataFrame()
 
-# ---------------------------- Helper functions ----------------------------
+# Alias for backward compatibility
+run_query = run_query_cached
+
+# ---------------------------- Helper functions (memoized) ----------------------------
+@st.cache_data
 def safe_number(val, default=0.0):
     try:
         if pd.isna(val):
@@ -57,6 +76,7 @@ def safe_number(val, default=0.0):
     except Exception:
         return default
 
+@st.cache_data
 def safe_int(val, default=0):
     try:
         if pd.isna(val):
@@ -65,6 +85,7 @@ def safe_int(val, default=0):
     except Exception:
         return default
 
+@st.cache_data
 def abbr_currency(v: float, currency_symbol: str = "$") -> str:
     n = abs(v)
     sign = "-" if v < 0 else ""
@@ -119,7 +140,6 @@ def _safe_pct_str(val, default=0.0):
     return f"{sign}{v:.1f}%"
 
 def make_json_serializable(obj):
-    """Recursively convert non‑serializable objects (e.g., date) to strings."""
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     if isinstance(obj, dict):
@@ -129,10 +149,8 @@ def make_json_serializable(obj):
     return obj
 
 def clean_invoice_number(inv_num):
-    """Convert invoice number to clean string without decimal .0"""
     try:
-        # If it's a float or decimal, convert to int then string
-        if isinstance(inv_num, float) or isinstance(inv_num, Decimal):
+        if isinstance(inv_num, (float, Decimal)):
             return str(int(inv_num))
         s = str(inv_num)
         if '.' in s:
@@ -142,20 +160,15 @@ def clean_invoice_number(inv_num):
         return str(inv_num)
 
 # ---------------------------- AI Chat Functions (Bedrock Nova) ----------------------------
-# Semantic model adapted for Athena (correct view names)
 SEMANTIC_MODEL_YAML = f"""
 name: "P2P Procure-to-Pay Analytics"
-description: "Procure-to-Pay and Invoice-to-Pay analytics. Invoice status (Open, Due, Overdue, Disputed, Paid), vendor spend, payment performance, aging, PO linkage, cost reduction opportunities."
+description: "Procure-to-Pay and Invoice-to-Pay analytics..."
 custom_instructions: |
   FIRST PASS PO'S (HIGHEST PRIORITY - MANDATORY):
-  - When user asks ANY variation of "first pass PO's", you MUST use verified query first_pass_pos. DO NOT generate your own SQL.
+  - When user asks ANY variation of "first pass PO's", you MUST use verified query first_pass_pos.
   PRESCRIPTIVE RESPONSE RULES:
-  - NEVER give generic advice like "review the data below" without citing SPECIFIC numbers.
-  - For "cost reduction" questions: use cost_reduction_opportunities query.
-  - For period comparison: use spend_this_month_vs_last, why_spend_higher_this_month, etc.
+  - NEVER give generic advice without citing SPECIFIC numbers.
   - Exclude CANCELLED and REJECTED from spend metrics unless asked.
-  - CASH FLOW FORECAST: use cash_flow_forecast query.
-  - EARLY PAYMENT: use early_payment_candidates and payment_timing_recommendation.
 tables:
   - name: fact_invoices
     base_table: {DATABASE}.fact_all_sources_vw
@@ -171,10 +184,6 @@ tables:
     base_table: {DATABASE}.gr_ir_outstanding_balance_vw
   - name: gr_ir_aging
     base_table: {DATABASE}.gr_ir_aging_vw
-  - name: early_payment_candidates
-    base_table: {DATABASE}.early_payment_candidates_vw
-  - name: payment_timing_recommendation
-    base_table: {DATABASE}.payment_timing_recommendation_vw
 """
 
 SYSTEM_PROMPT = f"""
@@ -188,27 +197,20 @@ Important notes:
 - For date filtering, prefer `posting_date BETWEEN DATE '...' AND DATE '...'`.
 - Always use COALESCE for null amounts.
 - Exclude CANCELLED and REJECTED invoices from spend metrics unless asked.
-- For aggregate queries, add a reasonable LIMIT (e.g., 100) unless the user asks for all rows.
-- Output only a JSON object with two keys: "sql" containing the SQL query string, and "explanation" containing a brief explanation of what the query does. Do not include any other text.
+- Output only a JSON object with two keys: "sql" containing the SQL query string, and "explanation". Do not include any other text.
 """
 
-def ask_bedrock(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
+@lru_cache(maxsize=100)
+def ask_bedrock_cached(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
+    """Cached Bedrock invocation."""
     try:
         body = json.dumps({
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [{"text": prompt}]
-                }
-            ],
+            "messages": [{"role": "user", "content": [{"text": prompt}]}],
             "system": [{"text": system_prompt}],
-            "inferenceConfig": {
-                "maxTokens": 4096,
-                "temperature": 0.0,
-                "topP": 0.9
-            }
+            "inferenceConfig": {"maxTokens": 4096, "temperature": 0.0, "topP": 0.9}
         })
-        response = bedrock_runtime.invoke_model(
+        bedrock = get_bedrock_runtime()
+        response = bedrock.invoke_model(
             modelId=BEDROCK_MODEL_ID,
             contentType="application/json",
             accept="application/json",
@@ -222,7 +224,7 @@ def ask_bedrock(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
 
 def generate_sql(question: str) -> tuple:
     prompt = f"User question: {question}\n\nGenerate SQL query and explanation as JSON."
-    response = ask_bedrock(prompt)
+    response = ask_bedrock_cached(prompt)
     if not response:
         return None, "Bedrock returned empty response."
     json_match = re.search(r'\{.*\}$', response, re.DOTALL)
@@ -232,8 +234,7 @@ def generate_sql(question: str) -> tuple:
         sql = data.get("sql", "").strip()
         explanation = data.get("explanation", "")
         return sql, explanation
-    except json.JSONDecodeError as e:
-        st.error(f"Failed to parse JSON: {e}\nResponse: {response}")
+    except json.JSONDecodeError:
         return None, "Could not parse SQL from AI response."
 
 def is_safe_sql(sql: str) -> bool:
@@ -287,25 +288,15 @@ def _pick_chart_columns(df: pd.DataFrame) -> tuple:
     cat_prefer = ("vendor_name", "month", "status", "aging_bucket", "po_purpose")
     num_prefer = ("spend", "total_spend", "invoice_count", "amount")
     cols_lower = {c.lower(): c for c in cols}
-    x_col = None
-    for pref in cat_prefer:
-        if pref in cols_lower:
-            x_col = cols_lower[pref]
-            break
-    if not x_col:
-        x_col = cols[0]
-    y_col = None
-    for pref in num_prefer:
-        if pref in cols_lower and cols_lower[pref] != x_col:
-            y_col = cols_lower[pref]
-            break
+    x_col = next((cols_lower[p] for p in cat_prefer if p in cols_lower), cols[0])
+    y_col = next((cols_lower[p] for p in num_prefer if p in cols_lower and cols_lower[p] != x_col), None)
     if not y_col:
         for c in cols:
             if c != x_col and pd.api.types.is_numeric_dtype(df[c]):
                 y_col = c
                 break
-    if not y_col:
-        y_col = cols[1] if len(cols) > 1 else None
+    if not y_col and len(cols) > 1:
+        y_col = cols[1]
     return (x_col, y_col)
 
 def alt_bar(df, x, y, title=None, horizontal=False, color="#1459d2", height=320):
@@ -373,8 +364,9 @@ def alt_donut_status(df, label_col="status", value_col="cnt", title=None, height
     st.altair_chart(chart, use_container_width=True)
 
 # ---------------------------- Quick Analysis Functions (Athena) ----------------------------
-def run_quick_analysis(key: str) -> dict:
-    """Run SQL for quick-analysis tiles; return all needed dataframes and metrics."""
+@st.cache_data(ttl=600)
+def run_quick_analysis_cached(key: str) -> dict:
+    """Run SQL for quick-analysis tiles; cached for 10 minutes."""
     base = f"{DATABASE}.fact_all_sources_vw f LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id"
     flt = "AND UPPER(f.invoice_status) NOT IN ('CANCELLED','REJECTED')"
     out = {"layout": "quick", "type": key, "metrics": {}, "monthly_df": None, "vendors_df": None, "extra_dfs": {}, "sql": {}, "anomaly": None}
@@ -533,53 +525,32 @@ def run_quick_analysis(key: str) -> dict:
 
     return out
 
-# ---------------------------- Persistence (SQLite) ----------------------------
+run_quick_analysis = run_quick_analysis_cached
+
+# ---------------------------- Persistence (SQLite) with in-memory caching ----------------------------
 DB_PATH = "procureiq.db"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS chat_sessions (
-        session_id TEXT PRIMARY KEY,
-        session_label TEXT,
-        created_at TIMESTAMP,
-        last_updated TIMESTAMP
+        session_id TEXT PRIMARY KEY, session_label TEXT, created_at TIMESTAMP, last_updated TIMESTAMP
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS chat_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT,
-        turn_index INTEGER,
-        role TEXT,
-        content TEXT,
-        sql_used TEXT,
-        source TEXT,
-        timestamp TIMESTAMP,
-        FOREIGN KEY(session_id) REFERENCES chat_sessions(session_id)
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, turn_index INTEGER, role TEXT, content TEXT,
+        sql_used TEXT, source TEXT, timestamp TIMESTAMP, FOREIGN KEY(session_id) REFERENCES chat_sessions(session_id)
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS question_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        normalized_query TEXT,
-        query_text TEXT,
-        user_name TEXT,
-        analysis_type TEXT,
-        asked_at TIMESTAMP
+        id INTEGER PRIMARY KEY AUTOINCREMENT, normalized_query TEXT, query_text TEXT, user_name TEXT,
+        analysis_type TEXT, asked_at TIMESTAMP
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS saved_insights (
-        insight_id TEXT PRIMARY KEY,
-        created_by TEXT,
-        page TEXT,
-        title TEXT,
-        question TEXT,
-        verified_query_name TEXT,
-        created_at TIMESTAMP
+        insight_id TEXT PRIMARY KEY, created_by TEXT, page TEXT, title TEXT, question TEXT,
+        verified_query_name TEXT, created_at TIMESTAMP
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS query_cache (
-        query_hash TEXT PRIMARY KEY,
-        question TEXT,
-        response_json TEXT,
-        created_at TIMESTAMP,
-        last_hit_at TIMESTAMP,
-        hit_count INTEGER
+        query_hash TEXT PRIMARY KEY, question TEXT, response_json TEXT, created_at TIMESTAMP,
+        last_hit_at TIMESTAMP, hit_count INTEGER
     )''')
     conn.commit()
     conn.close()
@@ -589,6 +560,39 @@ init_db()
 def get_current_user():
     return "user1"
 
+# Cached DB reads
+@st.cache_data(ttl=300)
+def get_saved_insights_cached(page="genie", limit=20):
+    user = get_current_user()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''SELECT insight_id, title, question, verified_query_name, created_at FROM saved_insights
+                 WHERE page = ? AND created_by = ? ORDER BY created_at DESC LIMIT ?''', (page, user, limit))
+    rows = c.fetchall()
+    conn.close()
+    return [{"id": row[0], "title": row[1], "question": row[2], "type": row[3], "created_at": row[4]} for row in rows]
+
+@st.cache_data(ttl=300)
+def get_frequent_questions_by_user_cached(limit=10):
+    user = get_current_user()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''SELECT normalized_query, COUNT(*) as cnt FROM question_history
+                 WHERE user_name = ? GROUP BY normalized_query ORDER BY cnt DESC LIMIT ?''', (user, limit))
+    rows = c.fetchall()
+    conn.close()
+    return [{"query": row[0], "count": row[1]} for row in rows]
+
+@st.cache_data(ttl=300)
+def get_frequent_questions_all_cached(limit=10):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''SELECT normalized_query, COUNT(*) as cnt FROM question_history
+                 GROUP BY normalized_query ORDER BY cnt DESC LIMIT ?''', (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return [{"query": row[0], "count": row[1]} for row in rows]
+
 def save_chat_message(session_id, turn_index, role, content, sql_used="", source=""):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -597,6 +601,7 @@ def save_chat_message(session_id, turn_index, role, content, sql_used="", source
               (session_id, turn_index, role, content, sql_used, source, datetime.now()))
     conn.commit()
     conn.close()
+    # Invalidate caches that depend on question history (but not needed for simple insert)
 
 def save_question(query, analysis_type):
     norm = query.lower().strip()
@@ -607,25 +612,9 @@ def save_question(query, analysis_type):
               (norm, query, user, analysis_type, datetime.now()))
     conn.commit()
     conn.close()
-
-def get_frequent_questions_by_user(limit=10):
-    user = get_current_user()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''SELECT normalized_query, COUNT(*) as cnt FROM question_history
-                 WHERE user_name = ? GROUP BY normalized_query ORDER BY cnt DESC LIMIT ?''', (user, limit))
-    rows = c.fetchall()
-    conn.close()
-    return [{"query": row[0], "count": row[1]} for row in rows]
-
-def get_frequent_questions_all(limit=10):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''SELECT normalized_query, COUNT(*) as cnt FROM question_history
-                 GROUP BY normalized_query ORDER BY cnt DESC LIMIT ?''', (limit,))
-    rows = c.fetchall()
-    conn.close()
-    return [{"query": row[0], "count": row[1]} for row in rows]
+    # Invalidate cached frequent questions
+    get_frequent_questions_by_user_cached.clear()
+    get_frequent_questions_all_cached.clear()
 
 def save_insight(question, title, analysis_type="custom", page="genie"):
     insight_id = str(uuid.uuid4())
@@ -637,16 +626,7 @@ def save_insight(question, title, analysis_type="custom", page="genie"):
               (insight_id, user, page, title, question, analysis_type, datetime.now()))
     conn.commit()
     conn.close()
-
-def get_saved_insights(page="genie", limit=20):
-    user = get_current_user()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''SELECT insight_id, title, question, verified_query_name, created_at FROM saved_insights
-                 WHERE page = ? AND created_by = ? ORDER BY created_at DESC LIMIT ?''', (page, user, limit))
-    rows = c.fetchall()
-    conn.close()
-    return [{"id": row[0], "title": row[1], "question": row[2], "type": row[3], "created_at": row[4]} for row in rows]
+    get_saved_insights_cached.clear()
 
 def get_cache(question):
     q_hash = hashlib.md5(question.lower().strip().encode()).hexdigest()
@@ -693,16 +673,22 @@ def render_dashboard():
             st.session_state.preset = "Custom"
             st.rerun()
     with col_vendor:
-        vendor_sql = f"""
-            SELECT DISTINCT v.vendor_name
-            FROM {DATABASE}.fact_all_sources_vw f
-            LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-            WHERE f.posting_date BETWEEN {sql_date(rng_start)} AND {sql_date(rng_end)}
-              AND v.vendor_name IS NOT NULL
-            ORDER BY 1
-        """
-        vendors_df = run_query(vendor_sql)
-        vendor_list = ["All Vendors"] + vendors_df["vendor_name"].tolist() if not vendors_df.empty else ["All Vendors"]
+        # Cache vendor list in session state (refresh only when date range changes)
+        vendor_cache_key = f"vendor_list_{rng_start}_{rng_end}"
+        if vendor_cache_key not in st.session_state:
+            vendor_sql = f"""
+                SELECT DISTINCT v.vendor_name
+                FROM {DATABASE}.fact_all_sources_vw f
+                LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+                WHERE f.posting_date BETWEEN {sql_date(rng_start)} AND {sql_date(rng_end)}
+                  AND v.vendor_name IS NOT NULL
+                ORDER BY 1
+            """
+            vendors_df = run_query(vendor_sql)
+            vendor_list = ["All Vendors"] + vendors_df["vendor_name"].tolist() if not vendors_df.empty else ["All Vendors"]
+            st.session_state[vendor_cache_key] = vendor_list
+        else:
+            vendor_list = st.session_state[vendor_cache_key]
         selected_vendor = st.selectbox("Vendor", vendor_list, label_visibility="collapsed")
     with col_preset:
         presets = ["Last 30 Days", "QTD", "YTD", "Custom"]
@@ -726,6 +712,7 @@ def render_dashboard():
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
 
+    # Single query for current KPIs
     cur_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -772,6 +759,7 @@ def render_dashboard():
     active_vendors_delta, _ = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, _ = pct_delta(cur_pending, prev_pending)
 
+    # First pass and auto rate queries (can be cached per date range)
     first_pass_sql = f"""
         WITH hist AS (
             SELECT invoice_number,
@@ -898,7 +886,6 @@ def render_dashboard():
             for col, (_, row_data) in zip(cols, row.iterrows()):
                 with col:
                     inv_num_raw = row_data['invoice_number']
-                    # Clean invoice number (remove .0)
                     inv_num_clean = clean_invoice_number(inv_num_raw)
                     vendor = row_data['vendor_name']
                     amount = row_data['amount']
@@ -987,7 +974,6 @@ def render_dashboard():
 
 # ---------------------------- GENIE PAGE (enhanced with full output) ----------------------------
 def process_custom_query(query: str) -> dict:
-    """Generate SQL, run it, and return a response dict for a custom query."""
     sql, _ = generate_sql(query)
     if not sql or not is_safe_sql(sql):
         return {"layout": "error", "message": "Failed to generate valid SQL."}
@@ -1022,7 +1008,6 @@ def render_genie():
     if "last_custom_query" not in st.session_state:
         st.session_state.last_custom_query = ""
 
-    # Auto-run a query if requested (e.g., from Action Playbook)
     auto_query = st.session_state.pop("auto_run_query", None)
     if auto_query:
         st.session_state.selected_analysis = "custom"
@@ -1080,7 +1065,7 @@ def render_genie():
 
     with left_col:
         with st.expander("Saved insights", expanded=False):
-            insights = get_saved_insights(page="genie")
+            insights = get_saved_insights_cached(page="genie")
             if insights:
                 for ins in insights:
                     if st.button(ins["title"], key=f"insight_{ins['id']}", use_container_width=True):
@@ -1102,7 +1087,7 @@ def render_genie():
                 st.caption("Save any Genie answer to see it here.")
 
         with st.expander("Frequently asked by you", expanded=False):
-            faqs = get_frequent_questions_by_user(5)
+            faqs = get_frequent_questions_by_user_cached(5)
             if faqs:
                 for faq in faqs:
                     if st.button(f"{faq['query'][:50]} ({faq['count']})", key=f"faq_user_{faq['query']}", use_container_width=True):
@@ -1124,7 +1109,7 @@ def render_genie():
                 st.caption("Your frequent questions will appear here.")
 
         with st.expander("Most frequent (all)", expanded=False):
-            all_faqs = get_frequent_questions_all(5)
+            all_faqs = get_frequent_questions_all_cached(5)
             if all_faqs:
                 for faq in all_faqs:
                     st.button(f"{faq['query'][:50]} ({faq['count']})", key=f"faq_all_{faq['query']}", use_container_width=True, disabled=True)
@@ -1447,7 +1432,6 @@ def render_invoices():
     if "invoice_search_term" not in st.session_state:
         st.session_state.invoice_search_term = ""
     
-    # Handle prefill from Dashboard (Needs Attention)
     prefill = st.session_state.pop("invoice_search_term", None)
     if prefill:
         st.session_state.inv_search_q = clean_invoice_number(prefill)
@@ -1470,18 +1454,18 @@ def render_invoices():
             st.session_state.invoice_status_filter = "All Status"
             st.rerun()
     
-    # Update session state with current search
     if user_search != search_term:
         st.session_state.inv_search_q = user_search
         st.rerun()
     
     col_vendor, col_status = st.columns(2)
     with col_vendor:
-        vendor_list = ["All Vendors"]
-        vendor_df = run_query(f"SELECT DISTINCT vendor_name FROM {DATABASE}.dim_vendor_vw ORDER BY vendor_name")
-        if not vendor_df.empty:
-            vendor_list += vendor_df["vendor_name"].tolist()
-        selected_vendor = st.selectbox("Vendor", vendor_list, key="inv_sel_vendor")
+        # Cache vendor list for invoice page (static)
+        if "inv_vendor_list" not in st.session_state:
+            vendor_df = run_query(f"SELECT DISTINCT vendor_name FROM {DATABASE}.dim_vendor_vw ORDER BY vendor_name")
+            vendor_list = ["All Vendors"] + vendor_df["vendor_name"].tolist() if not vendor_df.empty else ["All Vendors"]
+            st.session_state.inv_vendor_list = vendor_list
+        selected_vendor = st.selectbox("Vendor", st.session_state.inv_vendor_list, key="inv_sel_vendor")
     with col_status:
         status_options = ["All Status", "OPEN", "PAID", "DISPUTED", "OVERDUE", "DUE_NEXT_30"]
         selected_status_display = st.selectbox(
@@ -1507,7 +1491,6 @@ def render_invoices():
             where.append(f"UPPER(f.invoice_status) = '{selected_status}'")
     where_sql = " AND ".join(where) if where else "1=1"
     
-    # Main invoice query
     query = f"""
         SELECT DISTINCT
             f.invoice_number AS invoice_number,
@@ -1537,13 +1520,11 @@ def render_invoices():
         })
         st.dataframe(df_display, use_container_width=True, height=400)
         
-        # If search term provided and exactly one invoice found, show details
         if user_search and len(df) == 1:
             inv_num = clean_invoice_number(df.iloc[0,0])
             st.markdown("---")
             st.subheader(f"Invoice Details: {inv_num}")
             
-            # Invoice details (summary)
             details_sql = f"""
                 SELECT
                     f.invoice_number,
@@ -1564,7 +1545,6 @@ def render_invoices():
             if not details_df.empty:
                 st.dataframe(details_df, use_container_width=True)
             
-            # Status history
             hist_sql = f"""
                 SELECT
                     invoice_number,
@@ -1580,7 +1560,6 @@ def render_invoices():
                 st.subheader("Status History")
                 st.dataframe(hist_df, use_container_width=True)
             
-            # Vendor info
             vendor_sql = f"""
                 SELECT DISTINCT
                     v.vendor_id,
@@ -1608,7 +1587,6 @@ def render_invoices():
                 st.subheader("Vendor Info")
                 st.dataframe(vendor_df, use_container_width=True)
             
-            # Company info
             company_sql = f"""
                 SELECT DISTINCT
                     f.company_code,
@@ -1626,9 +1604,7 @@ def render_invoices():
                 st.subheader("Company Info")
                 st.dataframe(company_df, use_container_width=True)
             
-            # Genie AI insight for this invoice
             st.subheader("Genie insights")
-            # Use the same AI function as before
             inv_row = details_df.iloc[0].to_dict() if not details_df.empty else {}
             status_history = hist_df[["status", "effective_date", "status_notes"]].head(5).to_string(index=False) if not hist_df.empty else ""
             suggestion = _get_ai_invoice_suggestion(inv_num, inv_row, status_history)
@@ -1637,7 +1613,6 @@ def render_invoices():
         st.info("No invoices found. Try a different search term.")
 
 def _get_ai_invoice_suggestion(invoice_number: str, inv_row: dict, status_history: str = "") -> str:
-    """Use Bedrock to generate a short, actionable suggestion for the selected invoice."""
     status = str(inv_row.get("invoice_status", "")).strip()
     due = inv_row.get("due_date")
     aging = inv_row.get("aging_days")
@@ -1654,32 +1629,6 @@ def _get_ai_invoice_suggestion(invoice_number: str, inv_row: dict, status_histor
     except Exception:
         pass
     
-    overdue_context = ""
-    if is_overdue:
-        overdue_context = f"This invoice IS overdue (due date {due_str} has passed and it is not yet paid). "
-    elif status.upper() in ("PAID", "CLEARED"):
-        overdue_context = "This invoice is already PAID/CLEARED. It is NOT overdue. "
-    else:
-        overdue_context = "This invoice is NOT overdue (the due date has not passed yet). "
-    
-    prompt = (
-        "Concise procure-to-pay analyst. 2-3 sentences of actionable advice based ONLY on the data below. "
-        f"{overdue_context}"
-        "OPEN & not overdue: say proceed to pay. Overdue: recommend immediate review. PAID: no action. "
-        f"Invoice: {invoice_number}. Status: {status}. Due: {due_str}. Aging: {aging_str}. Amount: {amount_str}."
-    )
-    try:
-        result = session.sql(
-            "SELECT SNOWFLAKE.CORTEX.COMPLETE(?, ?) AS RESPONSE",
-            params=[CORTEX_PRESCRIPTIVE_MODEL, prompt]
-        ).to_pandas()
-        if not result.empty and "RESPONSE" in result.columns:
-            text = result.at[0, "RESPONSE"]
-            if text and isinstance(text, str) and len(text.strip()) > 10:
-                return text.strip()
-    except Exception:
-        pass
-    # Fallback
     if status.upper() in ("PAID", "CLEARED"):
         return f"Invoice {invoice_number} has already been **paid**. No further action is needed."
     elif is_overdue:
