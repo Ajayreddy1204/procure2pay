@@ -1,7 +1,7 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
 # Full parity with procureIQ_final_version1.py
-# Fixed: Quick analysis tiles now show ONLY the selected analysis
+# Fixed: Action Playbook buttons now auto-execute queries in Genie
 # ================================
 
 import streamlit as st
@@ -969,6 +969,34 @@ def render_genie():
     if "last_custom_query" not in st.session_state:
         st.session_state.last_custom_query = ""
 
+    # Check for pending query from Forecast page (Action Playbook)
+    if "genie_pending_query" in st.session_state and st.session_state.genie_pending_query:
+        pending_query = st.session_state.genie_pending_query
+        st.session_state.genie_pending_query = None  # Clear immediately
+        # Clear previous messages and run the query
+        st.session_state.genie_messages = []
+        st.session_state.genie_turn_index = 0
+        st.session_state.selected_analysis = "custom"
+        st.session_state.last_custom_query = pending_query
+        with st.spinner(f"Running query: {pending_query}..."):
+            sql, explanation = generate_sql(pending_query)
+            if sql and is_safe_sql(sql):
+                sql = ensure_limit(sql)
+                df = run_query(sql)
+                response_data = {"layout": "sql", "sql": sql, "df": df.to_dict(orient="records"), "question": pending_query}
+                set_cache(pending_query, response_data)
+                st.session_state.genie_response = response_data
+                st.session_state.genie_messages.append({"role": "user", "content": pending_query, "timestamp": datetime.now()})
+                st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": response_data, "timestamp": datetime.now()})
+                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", pending_query)
+                st.session_state.genie_turn_index += 1
+                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=sql)
+                st.session_state.genie_turn_index += 1
+                save_question(pending_query, "custom")
+            else:
+                st.error("Could not generate valid SQL for the requested analysis.")
+        st.rerun()
+
     # Quick analysis tiles
     st.markdown("## Welcome to ProcureIQ Genie")
     st.markdown("Let Genie run one of these quick analyses for you.")
@@ -1331,7 +1359,7 @@ def render_forecast():
     # Action Playbook
     st.markdown("---")
     st.markdown("### Action Playbook")
-    st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late.")
+    st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late. Each button opens Genie with a pre-built question wired to the right verified queries.")
     actions = [
         ("📊 Forecast cash outflow (7–90 days)", "Forecast cash outflow for the next 7, 14, 30, 60, and 90 days"),
         ("💰 Invoices to pay early to capture discounts", "Which invoices should we pay early to capture discounts?"),
@@ -1340,9 +1368,9 @@ def render_forecast():
     ]
     for label, question in actions:
         if st.button(label, use_container_width=True):
+            # Set pending query for Genie and navigate
+            st.session_state.genie_pending_query = question
             st.session_state.page = "Genie"
-            st.session_state.last_custom_query = question
-            st.session_state.selected_analysis = "custom"
             st.rerun()
 
     # GR/IR Reconciliation
