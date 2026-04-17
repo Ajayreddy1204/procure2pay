@@ -1,7 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# Full parity with procureIQ_final_version1.py
-# Fixed: Action Playbook buttons now auto-execute queries in Genie
+# Fully adapted for AWS Athena (correct view names)
 # ================================
 
 import streamlit as st
@@ -30,7 +29,7 @@ st.set_page_config(
 )
 
 # ---------------------------- Athena configuration ----------------------------
-DATABASE = "procure2pay"          # Your Athena database name
+DATABASE = "procure2pay"
 ATHENA_REGION = "us-east-1"
 BEDROCK_MODEL_ID = "amazon.nova-micro-v1:0"
 
@@ -119,9 +118,19 @@ def _safe_pct_str(val, default=0.0):
     sign = "+" if v >= 0 else ""
     return f"{sign}{v:.1f}%"
 
+def make_json_serializable(obj):
+    """Recursively convert non‑serializable objects (e.g., date) to strings."""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [make_json_serializable(i) for i in obj]
+    return obj
+
 # ---------------------------- AI Chat Functions (Bedrock Nova) ----------------------------
-# Full semantic model YAML (condensed but complete enough for Athena)
-SEMANTIC_MODEL_YAML = """
+# Semantic model adapted for Athena (correct view names)
+SEMANTIC_MODEL_YAML = f"""
 name: "P2P Procure-to-Pay Analytics"
 description: "Procure-to-Pay and Invoice-to-Pay analytics. Invoice status (Open, Due, Overdue, Disputed, Paid), vendor spend, payment performance, aging, PO linkage, cost reduction opportunities."
 custom_instructions: |
@@ -136,19 +145,23 @@ custom_instructions: |
   - EARLY PAYMENT: use early_payment_candidates and payment_timing_recommendation.
 tables:
   - name: fact_invoices
-    base_table: PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+    base_table: {DATABASE}.fact_all_sources_vw
     measures:
       - name: invoice_amount
-        expr: INVOICE_AMOUNT_LOCAL
+        expr: invoice_amount_local
         default_aggregation: sum
   - name: dim_vendor
-    base_table: PROCURE2PAY.INFORMATION_MART.DIM_VENDOR_VW
+    base_table: {DATABASE}.dim_vendor_vw
   - name: cash_flow_forecast
-    base_table: PROCURE2PAY.INFORMATION_MART.CASH_FLOW_FORECAST_VW
+    base_table: {DATABASE}.cash_flow_forecast_vw
   - name: gr_ir_outstanding
-    base_table: PROCURE2PAY.INFORMATION_MART.GR_IR_OUTSTANDING_BALANCE_VW
+    base_table: {DATABASE}.gr_ir_outstanding_balance_vw
   - name: gr_ir_aging
-    base_table: PROCURE2PAY.INFORMATION_MART.GR_IR_AGING_VW
+    base_table: {DATABASE}.gr_ir_aging_vw
+  - name: early_payment_candidates
+    base_table: {DATABASE}.early_payment_candidates_vw
+  - name: payment_timing_recommendation
+    base_table: {DATABASE}.payment_timing_recommendation_vw
 """
 
 SYSTEM_PROMPT = f"""
@@ -258,10 +271,28 @@ def _pick_chart_columns(df: pd.DataFrame) -> tuple:
     if df.empty or len(df.columns) < 2:
         return (None, None)
     cols = list(df.columns)
-    cat_prefer = ("VENDOR_NAME", "MONTH", "STATUS", "AGING_BUCKET", "PO_PURPOSE")
-    num_prefer = ("SPEND", "TOTAL_SPEND", "INVOICE_COUNT", "AMOUNT")
-    x_col = next((c for c in cat_prefer if c in df.columns), cols[0])
-    y_col = next((c for c in num_prefer if c in df.columns and c != x_col), cols[1])
+    cat_prefer = ("vendor_name", "month", "status", "aging_bucket", "po_purpose")
+    num_prefer = ("spend", "total_spend", "invoice_count", "amount")
+    cols_lower = {c.lower(): c for c in cols}
+    x_col = None
+    for pref in cat_prefer:
+        if pref in cols_lower:
+            x_col = cols_lower[pref]
+            break
+    if not x_col:
+        x_col = cols[0]
+    y_col = None
+    for pref in num_prefer:
+        if pref in cols_lower and cols_lower[pref] != x_col:
+            y_col = cols_lower[pref]
+            break
+    if not y_col:
+        for c in cols:
+            if c != x_col and pd.api.types.is_numeric_dtype(df[c]):
+                y_col = c
+                break
+    if not y_col:
+        y_col = cols[1] if len(cols) > 1 else None
     return (x_col, y_col)
 
 def alt_bar(df, x, y, title=None, horizontal=False, color="#1459d2", height=320):
@@ -285,27 +316,27 @@ def alt_bar(df, x, y, title=None, horizontal=False, color="#1459d2", height=320)
         chart = chart.properties(title=title)
     st.altair_chart(chart, use_container_width=True)
 
-def alt_line_monthly(df, month_col='MONTH', value_col='VALUE', height=140, title=None):
+def alt_line_monthly(df, month_col='month', value_col='value', height=140, title=None):
     if df.empty:
         st.info("No data for this chart.")
         return
     data = df.copy()
     try:
-        data[month_col] = pd.to_datetime(data[month_col].astype(str) + '-01')
-        data = data.sort_values(month_col)
-        data['MONTH_LABEL'] = data[month_col].dt.strftime('%b')
+        data['_month_dt'] = pd.to_datetime(data[month_col].astype(str) + '-01')
+        data = data.sort_values('_month_dt')
+        data['month_label'] = data['_month_dt'].dt.strftime('%b %Y')
     except:
-        data['MONTH_LABEL'] = data[month_col].astype(str)
+        data['month_label'] = data[month_col].astype(str)
     chart = alt.Chart(data).mark_line(point=True, color='#1e88e5').encode(
-        x=alt.X('MONTH_LABEL:N', axis=alt.Axis(title=None, labelAngle=0)),
+        x=alt.X('month_label:N', sort=None, axis=alt.Axis(title=None, labelAngle=-45)),
         y=alt.Y(f'{value_col}:Q', axis=alt.Axis(title=None, grid=False, format='~s')),
-        tooltip=[alt.Tooltip('MONTH_LABEL:N', title='Month'), alt.Tooltip(f'{value_col}:Q', format=',.0f')]
+        tooltip=[alt.Tooltip('month_label:N', title='Month'), alt.Tooltip(f'{value_col}:Q', format=',.0f')]
     ).properties(height=height)
     if title:
         chart = chart.properties(title=title)
     st.altair_chart(chart, use_container_width=True)
 
-def alt_donut_status(df, label_col="STATUS", value_col="CNT", title=None, height=340):
+def alt_donut_status(df, label_col="status", value_col="cnt", title=None, height=340):
     if df.empty or df[value_col].sum() == 0:
         st.info("No data for donut chart.")
         return
@@ -313,6 +344,9 @@ def alt_donut_status(df, label_col="STATUS", value_col="CNT", title=None, height
     df['pct'] = df[value_col] / total
     order = ["Paid", "Pending", "Disputed", "Other"]
     palette = {"Paid": "#22C55E", "Pending": "#FBBF24", "Disputed": "#EF4444", "Other": "#1E88E5"}
+    for cat in order:
+        if cat not in df[label_col].values:
+            df = pd.concat([df, pd.DataFrame({label_col: [cat], value_col: [0], 'pct': [0.0]})], ignore_index=True)
     base = alt.Chart(df).encode(
         theta=alt.Theta(field=value_col, type='quantitative', stack=True),
         color=alt.Color(field=label_col, type='nominal', scale=alt.Scale(domain=order, range=[palette[k] for k in order])),
@@ -337,7 +371,6 @@ def run_quick_analysis(key: str) -> dict:
     end_lit = sql_date(today)
 
     if key == "spending_overview":
-        # Total spend YTD
         total_sql = f"""
             SELECT SUM(COALESCE(f.invoice_amount_local,0)) AS total_spend
             FROM {base}
@@ -346,7 +379,6 @@ def run_quick_analysis(key: str) -> dict:
         total_df = run_query(total_sql)
         total_spend = safe_number(total_df.loc[0,"total_spend"]) if not total_df.empty else 0
 
-        # MoM and QoQ
         mom_sql = f"""
             WITH monthly AS (
                 SELECT DATE_TRUNC('month', f.posting_date) AS month,
@@ -371,7 +403,6 @@ def run_quick_analysis(key: str) -> dict:
         prev_m = safe_number(run_query(prev_m_sql).loc[0,"spend"]) if not run_query(prev_m_sql).empty else 0
         mom_pct = ((cur_m - prev_m)/prev_m*100) if prev_m else 0
 
-        # QoQ: compare current quarter to previous quarter
         current_quarter_start = date(today.year, ((today.month-1)//3)*3 + 1, 1)
         prev_quarter_start = date(today.year if current_quarter_start.month > 1 else today.year-1,
                                   ((current_quarter_start.month-1)//3)*3 + 1 if current_quarter_start.month > 1 else 10, 1)
@@ -390,7 +421,6 @@ def run_quick_analysis(key: str) -> dict:
         prev_q = safe_number(run_query(prev_q_sql).loc[0,"spend"]) if not run_query(prev_q_sql).empty else 0
         qoq_pct = ((cur_q - prev_q)/prev_q*100) if prev_q else 0
 
-        # Top 5 vendors share
         top5_sql = f"""
             SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local,0)) AS spend
             FROM {base}
@@ -403,9 +433,8 @@ def run_quick_analysis(key: str) -> dict:
 
         out["metrics"] = {"total_ytd": total_spend, "mom_pct": mom_pct, "qoq_pct": qoq_pct, "top5_pct": top5_pct}
 
-        # Monthly trend with spend, invoice_count, vendor_count
         monthly_sql = f"""
-            SELECT TO_CHAR(f.posting_date,'YYYY-MM') AS MONTH,
+            SELECT DATE_FORMAT(f.posting_date, '%Y-%m') AS MONTH,
                    SUM(COALESCE(f.invoice_amount_local,0)) AS MONTHLY_SPEND,
                    COUNT(DISTINCT f.invoice_number) AS INVOICE_COUNT,
                    COUNT(DISTINCT f.vendor_id) AS VENDOR_COUNT
@@ -417,7 +446,6 @@ def run_quick_analysis(key: str) -> dict:
         out["monthly_df"] = monthly_df
         out["extra_dfs"]["monthly_full"] = monthly_df
 
-        # Anomaly detection: find month with largest MoM spike >20%
         anomaly = None
         if monthly_df is not None and not monthly_df.empty and "MONTHLY_SPEND" in monthly_df.columns:
             monthly_df = monthly_df.sort_values("MONTH")
@@ -428,11 +456,10 @@ def run_quick_analysis(key: str) -> dict:
                 max_spike = spikes.loc[spikes["pct_change"].idxmax()]
                 spike_month = max_spike["MONTH"]
                 spike_pct = max_spike["pct_change"]
-                # Find top vendor in that month
                 top_vendor_sql = f"""
                     SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local,0)) AS spend
                     FROM {base}
-                    WHERE TO_CHAR(f.posting_date,'YYYY-MM') = '{spike_month}' {flt}
+                    WHERE DATE_FORMAT(f.posting_date, '%Y-%m') = '{spike_month}' {flt}
                     GROUP BY 1 ORDER BY 2 DESC LIMIT 1
                 """
                 top_vendor_df = run_query(top_vendor_sql)
@@ -441,7 +468,6 @@ def run_quick_analysis(key: str) -> dict:
                 anomaly = f"{spike_month} spending spiked by {spike_pct:.0f}% vs prior month, primarily driven by {vendor} ({abbr_currency(vendor_amt)})."
         out["anomaly"] = anomaly
 
-        # Top vendors for YTD
         vendors_sql = f"""
             SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local,0)) AS SPEND
             FROM {base}
@@ -465,7 +491,7 @@ def run_quick_analysis(key: str) -> dict:
 
     elif key == "payment_performance":
         pm_sql = f"""
-            SELECT TO_CHAR(f.payment_date,'YYYY-MM') AS MONTH,
+            SELECT DATE_FORMAT(f.payment_date, '%Y-%m') AS MONTH,
                    ROUND(AVG(DATE_DIFF('day', f.posting_date, f.payment_date)),1) AS AVG_DAYS,
                    SUM(CASE WHEN DATE_DIFF('day', f.due_date, f.payment_date) > 0 THEN 1 ELSE 0 END) AS LATE_PAYMENTS,
                    COUNT(*) AS TOTAL_PAYMENTS
@@ -622,11 +648,12 @@ def get_cache(question):
 
 def set_cache(question, response):
     q_hash = hashlib.md5(question.lower().strip().encode()).hexdigest()
+    serializable_response = make_json_serializable(response)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''INSERT OR REPLACE INTO query_cache (query_hash, question, response_json, created_at, last_hit_at, hit_count)
                  VALUES (?, ?, ?, ?, ?, COALESCE((SELECT hit_count+1 FROM query_cache WHERE query_hash=?), 1))''',
-              (q_hash, question, json.dumps(response), datetime.now(), datetime.now(), q_hash))
+              (q_hash, question, json.dumps(serializable_response), datetime.now(), datetime.now(), q_hash))
     conn.commit()
     conn.close()
 
@@ -944,6 +971,17 @@ def render_dashboard():
             st.info("No trend data")
 
 # ---------------------------- GENIE PAGE (enhanced with full output) ----------------------------
+def process_custom_query(query: str) -> dict:
+    """Generate SQL, run it, and return a response dict for a custom query."""
+    sql, _ = generate_sql(query)
+    if not sql or not is_safe_sql(sql):
+        return {"layout": "error", "message": "Failed to generate valid SQL."}
+    sql = ensure_limit(sql)
+    df = run_query(sql)
+    if df.empty:
+        return {"layout": "error", "message": "Query returned no data."}
+    return {"layout": "sql", "sql": sql, "df": df.to_dict(orient="records"), "question": query}
+
 def render_genie():
     st.markdown("""
     <style>
@@ -969,32 +1007,25 @@ def render_genie():
     if "last_custom_query" not in st.session_state:
         st.session_state.last_custom_query = ""
 
-    # Check for pending query from Forecast page (Action Playbook)
-    if "genie_pending_query" in st.session_state and st.session_state.genie_pending_query:
-        pending_query = st.session_state.genie_pending_query
-        st.session_state.genie_pending_query = None  # Clear immediately
-        # Clear previous messages and run the query
-        st.session_state.genie_messages = []
-        st.session_state.genie_turn_index = 0
+    # Auto-run a query if requested (e.g., from Action Playbook)
+    auto_query = st.session_state.pop("auto_run_query", None)
+    if auto_query:
         st.session_state.selected_analysis = "custom"
-        st.session_state.last_custom_query = pending_query
-        with st.spinner(f"Running query: {pending_query}..."):
-            sql, explanation = generate_sql(pending_query)
-            if sql and is_safe_sql(sql):
-                sql = ensure_limit(sql)
-                df = run_query(sql)
-                response_data = {"layout": "sql", "sql": sql, "df": df.to_dict(orient="records"), "question": pending_query}
-                set_cache(pending_query, response_data)
-                st.session_state.genie_response = response_data
-                st.session_state.genie_messages.append({"role": "user", "content": pending_query, "timestamp": datetime.now()})
-                st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": response_data, "timestamp": datetime.now()})
-                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", pending_query)
+        st.session_state.last_custom_query = auto_query
+        with st.spinner("Running query..."):
+            result = process_custom_query(auto_query)
+            st.session_state.genie_response = result
+            st.session_state.genie_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
+            if result.get("layout") == "sql":
+                st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
+                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", auto_query)
                 st.session_state.genie_turn_index += 1
-                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=sql)
+                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
                 st.session_state.genie_turn_index += 1
-                save_question(pending_query, "custom")
+                save_question(auto_query, "custom")
+                set_cache(auto_query, result)
             else:
-                st.error("Could not generate valid SQL for the requested analysis.")
+                st.session_state.genie_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
         st.rerun()
 
     # Quick analysis tiles
@@ -1013,7 +1044,6 @@ def render_genie():
                 st.markdown(f"**{title}**")
                 st.caption(desc)
                 if st.button(f"Ask Genie", key=f"quick_{key}", use_container_width=True):
-                    # Clear previous chat history when a new quick analysis is requested
                     st.session_state.genie_messages = []
                     st.session_state.genie_turn_index = 0
                     st.session_state.selected_analysis = key
@@ -1042,20 +1072,16 @@ def render_genie():
                         st.session_state.selected_analysis = "custom"
                         st.session_state.last_custom_query = ins["question"]
                         with st.spinner("Running saved insight..."):
-                            sql, _ = generate_sql(ins["question"])
-                            if sql and is_safe_sql(sql):
-                                sql = ensure_limit(sql)
-                                df = run_query(sql)
-                                st.session_state.genie_response = {"layout": "sql", "sql": sql, "df": df.to_dict(orient="records"), "question": ins["question"]}
-                                st.session_state.genie_messages.append({"role": "user", "content": ins["question"], "timestamp": datetime.now()})
-                                st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": st.session_state.genie_response, "timestamp": datetime.now()})
-                                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", ins["question"])
-                                st.session_state.genie_turn_index += 1
-                                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=sql)
-                                st.session_state.genie_turn_index += 1
-                                save_question(ins["question"], "custom")
-                            else:
-                                st.error("Could not generate valid SQL for saved insight.")
+                            result = process_custom_query(ins["question"])
+                            st.session_state.genie_response = result
+                            st.session_state.genie_messages.append({"role": "user", "content": ins["question"], "timestamp": datetime.now()})
+                            st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", ins["question"])
+                            st.session_state.genie_turn_index += 1
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
+                            st.session_state.genie_turn_index += 1
+                            save_question(ins["question"], "custom")
+                            set_cache(ins["question"], result)
                         st.rerun()
             else:
                 st.caption("Save any Genie answer to see it here.")
@@ -1068,20 +1094,16 @@ def render_genie():
                         st.session_state.selected_analysis = "custom"
                         st.session_state.last_custom_query = faq["query"]
                         with st.spinner("Running..."):
-                            sql, _ = generate_sql(faq["query"])
-                            if sql and is_safe_sql(sql):
-                                sql = ensure_limit(sql)
-                                df = run_query(sql)
-                                st.session_state.genie_response = {"layout": "sql", "sql": sql, "df": df.to_dict(orient="records"), "question": faq["query"]}
-                                st.session_state.genie_messages.append({"role": "user", "content": faq["query"], "timestamp": datetime.now()})
-                                st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": st.session_state.genie_response, "timestamp": datetime.now()})
-                                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", faq["query"])
-                                st.session_state.genie_turn_index += 1
-                                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=sql)
-                                st.session_state.genie_turn_index += 1
-                                save_question(faq["query"], "custom")
-                            else:
-                                st.error("Could not generate SQL.")
+                            result = process_custom_query(faq["query"])
+                            st.session_state.genie_response = result
+                            st.session_state.genie_messages.append({"role": "user", "content": faq["query"], "timestamp": datetime.now()})
+                            st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", faq["query"])
+                            st.session_state.genie_turn_index += 1
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
+                            st.session_state.genie_turn_index += 1
+                            save_question(faq["query"], "custom")
+                            set_cache(faq["query"], result)
                         st.rerun()
             else:
                 st.caption("Your frequent questions will appear here.")
@@ -1105,7 +1127,6 @@ def render_genie():
                 if "response" in msg and msg["response"]:
                     resp = msg["response"]
                     if resp.get("layout") == "quick":
-                        # Display metrics as KPI tiles
                         metrics = resp.get("metrics", {})
                         if metrics:
                             metric_cols = st.columns(len(metrics))
@@ -1122,34 +1143,28 @@ def render_genie():
                                     else:
                                         st.metric(k.replace("_"," ").title(), str(v))
 
-                        # Anomaly banner
                         anomaly = resp.get("anomaly")
                         if anomaly:
                             st.markdown(f'<div class="anomaly-banner">⚠️ <strong>Anomaly Detected</strong><br/>{html.escape(anomaly)}</div>', unsafe_allow_html=True)
 
-                        # Monthly trend chart (spend)
                         monthly_df = resp.get("monthly_df")
                         if monthly_df is not None and not monthly_df.empty and "MONTHLY_SPEND" in monthly_df.columns:
                             st.subheader("Spending Trends")
                             alt_line_monthly(monthly_df.rename(columns={"MONTH":"MONTH", "MONTHLY_SPEND":"VALUE"}), month_col="MONTH", value_col="VALUE", height=300, title="Monthly Spend Trend (Last 12 Months)")
 
-                        # Invoice volume by month
                         if monthly_df is not None and not monthly_df.empty and "INVOICE_COUNT" in monthly_df.columns:
                             st.subheader("Invoice volume by month")
                             alt_bar(monthly_df, x="MONTH", y="INVOICE_COUNT", color="#1e88e5", height=250)
 
-                        # Active vendors by month
                         if monthly_df is not None and not monthly_df.empty and "VENDOR_COUNT" in monthly_df.columns:
                             st.subheader("Active vendors by month")
                             alt_bar(monthly_df, x="MONTH", y="VENDOR_COUNT", color="#7c3aed", height=250)
 
-                        # Top vendors bar chart (horizontal)
                         vendors_df = resp.get("vendors_df")
                         if vendors_df is not None and not vendors_df.empty and "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
                             st.subheader("Top 10 Vendors by Spend (YTD)")
                             alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=400)
 
-                        # Prescriptive insights using Bedrock (simulate Cortex)
                         st.subheader("Prescriptive — Recommendations & next steps")
                         prescriptive_text = generate_prescriptive_from_quick(resp)
                         if prescriptive_text:
@@ -1157,7 +1172,6 @@ def render_genie():
                         else:
                             st.info("No prescriptive insights available.")
 
-                        # SQL expanders
                         with st.expander("Query outputs"):
                             st.caption("Show full result tables")
                             if monthly_df is not None and not monthly_df.empty:
@@ -1178,9 +1192,10 @@ def render_genie():
                             st.altair_chart(chart, use_container_width=True)
                         with st.expander("View SQL"):
                             st.code(resp["sql"], language="sql")
+                    elif resp.get("layout") == "error":
+                        st.error(resp.get("message", "Unknown error"))
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Chat input form (appends to conversation, does NOT clear)
         with st.form(key="genie_form", clear_on_submit=True):
             col_input, col_btn = st.columns([0.85, 0.15])
             with col_input:
@@ -1200,26 +1215,22 @@ def render_genie():
                         st.session_state.genie_turn_index += 1
                         save_question(user_question, "custom")
                     else:
-                        sql, explanation = generate_sql(user_question)
-                        if sql and is_safe_sql(sql):
-                            sql = ensure_limit(sql)
-                            df = run_query(sql)
-                            response_data = {"layout": "sql", "sql": sql, "df": df.to_dict(orient="records"), "question": user_question}
-                            set_cache(user_question, response_data)
-                            st.session_state.genie_response = response_data
+                        result = process_custom_query(user_question)
+                        if result.get("layout") == "sql":
+                            set_cache(user_question, result)
+                            st.session_state.genie_response = result
                             st.session_state.genie_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
-                            st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": response_data, "timestamp": datetime.now()})
+                            st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
                             save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
                             st.session_state.genie_turn_index += 1
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=sql)
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
                             st.session_state.genie_turn_index += 1
                             save_question(user_question, "custom")
                         else:
-                            st.error("Could not generate valid SQL. Please rephrase.")
+                            st.error(result.get("message", "Query failed"))
                 st.rerun()
 
 def generate_prescriptive_from_quick(resp: dict) -> str:
-    """Generate simple prescriptive insights from quick analysis data using rule-based logic."""
     insights = []
     metrics = resp.get("metrics", {})
     total_ytd = metrics.get("total_ytd", 0)
@@ -1238,7 +1249,6 @@ def generate_prescriptive_from_quick(resp: dict) -> str:
     if top5_pct:
         insights.append(f"• Top 5 vendors account for {top5_pct:.0f}% of spend. Action: Negotiate volume discounts and consider consolidation.")
 
-    # Anomaly
     anomaly = resp.get("anomaly")
     if anomaly:
         insights.append(f"• Anomaly: {anomaly[:100]}... Action: Investigate cause and prevent recurrence.")
@@ -1251,7 +1261,6 @@ def generate_prescriptive_from_quick(resp: dict) -> str:
 def render_forecast():
     st.subheader("Cash Flow Need Forecast")
 
-    # Cash flow forecast
     cf_sql = f"""
         SELECT
             forecast_bucket,
@@ -1359,7 +1368,7 @@ def render_forecast():
     # Action Playbook
     st.markdown("---")
     st.markdown("### Action Playbook")
-    st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late. Each button opens Genie with a pre-built question wired to the right verified queries.")
+    st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late.")
     actions = [
         ("📊 Forecast cash outflow (7–90 days)", "Forecast cash outflow for the next 7, 14, 30, 60, and 90 days"),
         ("💰 Invoices to pay early to capture discounts", "Which invoices should we pay early to capture discounts?"),
@@ -1368,8 +1377,7 @@ def render_forecast():
     ]
     for label, question in actions:
         if st.button(label, use_container_width=True):
-            # Set pending query for Genie and navigate
-            st.session_state.genie_pending_query = question
+            st.session_state.auto_run_query = question
             st.session_state.page = "Genie"
             st.rerun()
 
