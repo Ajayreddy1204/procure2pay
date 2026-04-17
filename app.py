@@ -1,6 +1,7 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
 # Full parity with procureIQ_final_version1.py
+# Fixed: Quick analysis tiles now show ONLY the selected analysis
 # ================================
 
 import streamlit as st
@@ -984,6 +985,9 @@ def render_genie():
                 st.markdown(f"**{title}**")
                 st.caption(desc)
                 if st.button(f"Ask Genie", key=f"quick_{key}", use_container_width=True):
+                    # Clear previous chat history when a new quick analysis is requested
+                    st.session_state.genie_messages = []
+                    st.session_state.genie_turn_index = 0
                     st.session_state.selected_analysis = key
                     st.session_state.last_custom_query = title
                     with st.spinner(f"Running {title}..."):
@@ -1119,7 +1123,6 @@ def render_genie():
 
                         # Prescriptive insights using Bedrock (simulate Cortex)
                         st.subheader("Prescriptive — Recommendations & next steps")
-                        # Generate prescriptive text from data
                         prescriptive_text = generate_prescriptive_from_quick(resp)
                         if prescriptive_text:
                             st.markdown(f'<div style="font-size:14px; line-height:1.6;">{prescriptive_text}</div>', unsafe_allow_html=True)
@@ -1149,7 +1152,7 @@ def render_genie():
                             st.code(resp["sql"], language="sql")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Chat input form
+        # Chat input form (appends to conversation, does NOT clear)
         with st.form(key="genie_form", clear_on_submit=True):
             col_input, col_btn = st.columns([0.85, 0.15])
             with col_input:
