@@ -1,6 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# OPTIMIZED VERSION: Full caching, no Snowflake, pure AWS
+# UI Enhanced: KPI arrows, Needs Attention tags, improved layout
 # ================================
 
 import streamlit as st
@@ -46,14 +46,11 @@ def get_bedrock_runtime():
 def get_athena_client():
     return get_aws_session().client("athena", region_name=ATHENA_REGION)
 
-# Cached query execution
 @st.cache_data(ttl=300, show_spinner=False)
 def run_query_cached(sql: str) -> pd.DataFrame:
-    """Execute Athena query with caching (5 minutes TTL)."""
     try:
         session = get_aws_session()
         df = wr.athena.read_sql_query(sql, database=DATABASE, boto3_session=session)
-        # Convert Decimal columns to float once
         for col in df.columns:
             if df[col].dtype == object and df[col].apply(lambda x: isinstance(x, Decimal)).any():
                 df[col] = df[col].astype(float)
@@ -64,7 +61,7 @@ def run_query_cached(sql: str) -> pd.DataFrame:
 
 run_query = run_query_cached
 
-# ---------------------------- Helper functions (memoized) ----------------------------
+# ---------------------------- Helper functions ----------------------------
 @st.cache_data
 def safe_number(val, default=0.0):
     try:
@@ -130,7 +127,7 @@ def pct_delta(cur, prev):
     if abs(change) < 0.05:
         return "0%", True
     sign = "↑" if change >= 0 else "↓"
-    return f"{sign} {change:+.1f}%".replace("+", "+"), change >= 0
+    return f"{sign} {abs(change):.1f}%".replace("+", "+"), change >= 0
 
 def _safe_pct_str(val, default=0.0):
     v = safe_number(val, default)
@@ -156,6 +153,30 @@ def clean_invoice_number(inv_num):
         return s
     except:
         return str(inv_num)
+
+# Custom KPI tile with colored arrow
+def kpi_tile(title: str, value: str, delta_text: str = None, is_positive: bool = True):
+    """Display KPI tile with colored delta arrow."""
+    if delta_text and delta_text != "0%":
+        if "↑" in delta_text:
+            arrow = "↑"
+            color = "#118d57"  # green
+        elif "↓" in delta_text:
+            arrow = "↓"
+            color = "#d32f2f"  # red
+        else:
+            arrow = ""
+            color = "#64748b"
+        delta_html = f'<div style="margin-top: 4px; font-weight: 900; color: {color};">{delta_text}</div>'
+    else:
+        delta_html = ""
+    st.markdown(f"""
+        <div class="kpi">
+            <div class="title">{title}</div>
+            <div class="value">{value}</div>
+            {delta_html}
+        </div>
+    """, unsafe_allow_html=True)
 
 # ---------------------------- AI Chat Functions (Bedrock Nova) ----------------------------
 SEMANTIC_MODEL_YAML = f"""
@@ -200,7 +221,6 @@ Important notes:
 
 @lru_cache(maxsize=100)
 def ask_bedrock_cached(prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
-    """Cached Bedrock invocation."""
     try:
         body = json.dumps({
             "messages": [{"role": "user", "content": [{"text": prompt}]}],
@@ -364,7 +384,6 @@ def alt_donut_status(df, label_col="status", value_col="cnt", title=None, height
 # ---------------------------- Quick Analysis Functions (Athena) ----------------------------
 @st.cache_data(ttl=600)
 def run_quick_analysis_cached(key: str) -> dict:
-    """Run SQL for quick-analysis tiles; cached for 10 minutes."""
     base = f"{DATABASE}.fact_all_sources_vw f LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id"
     flt = "AND UPPER(f.invoice_status) NOT IN ('CANCELLED','REJECTED')"
     out = {"layout": "quick", "type": key, "metrics": {}, "monthly_df": None, "vendors_df": None, "extra_dfs": {}, "sql": {}, "anomaly": None}
@@ -525,7 +544,7 @@ def run_quick_analysis_cached(key: str) -> dict:
 
 run_quick_analysis = run_quick_analysis_cached
 
-# ---------------------------- Persistence (SQLite) with in-memory caching ----------------------------
+# ---------------------------- Persistence (SQLite) ----------------------------
 DB_PATH = "procureiq.db"
 
 def init_db():
@@ -558,7 +577,6 @@ init_db()
 def get_current_user():
     return "user1"
 
-# Cached DB reads
 @st.cache_data(ttl=300)
 def get_saved_insights_cached(page="genie", limit=20):
     user = get_current_user()
@@ -646,7 +664,7 @@ def set_cache(question, response):
     conn.commit()
     conn.close()
 
-# ---------------------------- DASHBOARD PAGE ----------------------------
+# ---------------------------- DASHBOARD PAGE (UI Enhanced) ----------------------------
 def render_dashboard():
     if "preset" not in st.session_state:
         st.session_state.preset = "Last 30 Days"
@@ -657,7 +675,8 @@ def render_dashboard():
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
 
-    col_date, col_vendor, col_preset = st.columns([2, 2, 3])
+    # Adjust column widths for date/vendor/preset to reduce rightward shift
+    col_date, col_vendor, col_preset = st.columns([1.4, 1.4, 2.2])
     with col_date:
         date_range = st.date_input("Date Range", value=st.session_state.date_range, format="YYYY-MM-DD", label_visibility="collapsed")
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
@@ -707,6 +726,7 @@ def render_dashboard():
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
 
+    # KPI queries (same as before)
     cur_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -747,12 +767,13 @@ def render_dashboard():
     prev_active_vendors = safe_int(prev_df.loc[0,"active_vendors"]) if not prev_df.empty else 0
     prev_pending = safe_int(prev_df.loc[0,"pending_inv"]) if not prev_df.empty else 0
 
-    spend_delta, _ = pct_delta(cur_spend, prev_spend)
-    active_pos_delta, _ = pct_delta(cur_active_pos, prev_active_pos)
-    total_pos_delta, _ = pct_delta(cur_total_pos, prev_total_pos)
-    active_vendors_delta, _ = pct_delta(cur_active_vendors, prev_active_vendors)
-    pending_delta, _ = pct_delta(cur_pending, prev_pending)
+    spend_delta, spend_up = pct_delta(cur_spend, prev_spend)
+    active_pos_delta, active_pos_up = pct_delta(cur_active_pos, prev_active_pos)
+    total_pos_delta, total_pos_up = pct_delta(cur_total_pos, prev_total_pos)
+    active_vendors_delta, active_vendors_up = pct_delta(cur_active_vendors, prev_active_vendors)
+    pending_delta, pending_up = pct_delta(cur_pending, prev_pending)
 
+    # First pass and auto rate
     first_pass_sql = f"""
         WITH hist AS (
             SELECT invoice_number,
@@ -789,17 +810,27 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0,"auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
+    # Row 1: 4 KPIs
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("TOTAL SPEND", abbr_currency(cur_spend), delta=spend_delta, delta_color="normal")
-    col2.metric("ACTIVE PO'S", f"{cur_active_pos:,}", delta=active_pos_delta, delta_color="normal")
-    col3.metric("TOTAL PO'S", f"{cur_total_pos:,}", delta=total_pos_delta, delta_color="normal")
-    col4.metric("ACTIVE VENDORS", f"{cur_active_vendors:,}", delta=active_vendors_delta, delta_color="normal")
+    with col1:
+        kpi_tile("TOTAL SPEND", abbr_currency(cur_spend), spend_delta, spend_up)
+    with col2:
+        kpi_tile("ACTIVE PO'S", f"{cur_active_pos:,}", active_pos_delta, active_pos_up)
+    with col3:
+        kpi_tile("TOTAL PO'S", f"{cur_total_pos:,}", total_pos_delta, total_pos_up)
+    with col4:
+        kpi_tile("ACTIVE VENDORS", f"{cur_active_vendors:,}", active_vendors_delta, active_vendors_up)
 
+    # Row 2: 4 KPIs
     col5, col6, col7, col8 = st.columns(4)
-    col5.metric("PENDING INVOICES", f"{cur_pending:,}", delta=pending_delta, delta_color="normal")
-    col6.metric("AVG INVOICE PROCESSING TIME", f"{cur_avg_processing:.1f}d")
-    col7.metric("FIRST PASS INVOICES %", f"{first_pass_rate:.1f}%")
-    col8.metric("AUTOPROCESSED %", f"{auto_rate:.1f}%")
+    with col5:
+        kpi_tile("PENDING INVOICES", f"{cur_pending:,}", pending_delta, pending_up)
+    with col6:
+        kpi_tile("AVG INVOICE PROCESSING TIME", f"{cur_avg_processing:.1f}d")
+    with col7:
+        kpi_tile("FIRST PASS INVOICES %", f"{first_pass_rate:.1f}%")
+    with col8:
+        kpi_tile("AUTOPROCESSED %", f"{auto_rate:.1f}%")
     st.markdown("---")
 
     # Needs Attention
@@ -835,6 +866,7 @@ def render_dashboard():
             st.session_state.na_page = 0
             st.rerun()
 
+    # Load attention items
     if st.session_state.na_tab == "Overdue":
         attention_sql = f"""
             SELECT f.invoice_number, v.vendor_name, f.invoice_amount_local AS amount, f.due_date, f.aging_days
@@ -845,6 +877,9 @@ def render_dashboard():
               AND f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE'
             ORDER BY f.due_date ASC
         """
+        tag_label = "Overdue"
+        tag_color = "#d32f2f"
+        tag_bg = "#fde7e9"
     elif st.session_state.na_tab == "Disputed":
         attention_sql = f"""
             SELECT f.invoice_number, v.vendor_name, f.invoice_amount_local AS amount, f.due_date, f.aging_days
@@ -855,6 +890,9 @@ def render_dashboard():
               AND UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED')
             ORDER BY f.due_date ASC
         """
+        tag_label = "Disputed"
+        tag_color = "#f59e0b"
+        tag_bg = "#fff4e5"
     else:
         attention_sql = f"""
             SELECT f.invoice_number, v.vendor_name, f.invoice_amount_local AS amount, f.due_date, f.aging_days
@@ -865,6 +903,10 @@ def render_dashboard():
               AND f.due_date >= CURRENT_DATE AND f.due_date <= DATE_ADD('day', 30, CURRENT_DATE) AND UPPER(f.invoice_status) = 'OPEN'
             ORDER BY f.due_date ASC
         """
+        tag_label = "Due soon"
+        tag_color = "#0284c7"
+        tag_bg = "#dbeafe"
+
     attention_df = run_query(attention_sql)
     if not attention_df.empty:
         items_per_page = 8
@@ -873,27 +915,31 @@ def render_dashboard():
         start_idx = st.session_state.na_page * items_per_page
         end_idx = min(start_idx + items_per_page, total_items)
         page_df = attention_df.iloc[start_idx:end_idx]
-        rows = [page_df.iloc[i:i+4] for i in range(0, len(page_df), 4)]
-        for row in rows:
+
+        # Display cards in rows of 4
+        for i in range(0, len(page_df), 4):
             cols = st.columns(4)
-            for col, (_, row_data) in zip(cols, row.iterrows()):
-                with col:
-                    inv_num_raw = row_data['invoice_number']
-                    inv_num_clean = clean_invoice_number(inv_num_raw)
-                    vendor = row_data['vendor_name']
-                    amount = row_data['amount']
-                    due_date = row_data['due_date']
+            for j in range(4):
+                if i + j < len(page_df):
+                    row = page_df.iloc[i + j]
+                    inv_num = clean_invoice_number(row['invoice_number'])
+                    vendor = row['vendor_name']
+                    amount = row['amount']
+                    due_date = row['due_date']
                     st.markdown(f"""
-                        <div style="border:1px solid #e5e7eb; border-radius:12px; padding:12px; margin-bottom:12px;">
-                            <div style="font-weight:bold">{vendor}</div>
-                            <div style="font-size:0.9rem">{abbr_currency(amount)}</div>
-                            <div style="font-size:0.8rem; color:#666">Due: {due_date}</div>
+                        <div style="border:1px solid #e5e7eb; border-radius:12px; padding:12px; margin-bottom:12px; background:#fff;">
+                            <div style="font-weight:bold; margin-bottom:4px;">{vendor}</div>
+                            <div style="display:inline-block; background:{tag_bg}; color:{tag_color}; font-size:12px; padding:2px 8px; border-radius:999px; margin-bottom:8px;">{tag_label}</div>
+                            <div style="font-size:1.1rem; font-weight:600;">{abbr_currency(amount)}</div>
+                            <div style="font-size:0.8rem; color:#666;">Due: {due_date}</div>
                         </div>
                     """, unsafe_allow_html=True)
-                    if st.button(f"View Invoice {inv_num_clean}", key=f"na_card_{inv_num_clean}"):
+                    if st.button(f"View Invoice {inv_num}", key=f"na_card_{inv_num}_{i+j}"):
                         st.session_state.page = "Invoices"
-                        st.session_state.invoice_search_term = inv_num_clean
+                        st.session_state.invoice_search_term = inv_num
                         st.rerun()
+
+        # Pagination controls
         col_prev, col_info, col_next = st.columns([1,2,1])
         with col_prev:
             if st.button("← Prev", disabled=(st.session_state.na_page == 0)):
@@ -1419,7 +1465,6 @@ def render_forecast():
 
 # ---------------------------- INVOICES PAGE ----------------------------
 def _get_ai_invoice_suggestion(invoice_number: str, inv_row: dict, status_history: str = "") -> str:
-    """Use Bedrock Nova to generate a short, actionable suggestion for the selected invoice."""
     status = str(inv_row.get("invoice_status", "")).strip()
     due = inv_row.get("due_date")
     aging = inv_row.get("aging_days")
@@ -1450,7 +1495,6 @@ def _get_ai_invoice_suggestion(invoice_number: str, inv_row: dict, status_histor
         "OPEN & not overdue: say proceed to pay. Overdue: recommend immediate review. PAID: no action. "
         f"Invoice: {invoice_number}. Status: {status}. Due: {due_str}. Aging: {aging_str}. Amount: {amount_str}."
     )
-    # Use Bedrock Nova via cached function
     response = ask_bedrock_cached(prompt, system_prompt="You are a helpful procurement analyst. Provide concise, actionable advice.")
     if response and len(response.strip()) > 10:
         return response.strip()
@@ -1648,15 +1692,43 @@ def render_invoices():
     else:
         st.info("No invoices found. Try a different search term.")
 
-# ---------------------------- Main App Layout ----------------------------
+# ---------------------------- Main App Layout (with CSS tweaks) ----------------------------
 st.markdown("""
 <style>
-.kpi { background: #fff; border: 1px solid #e6e8ee; border-radius: 12px; padding: 12px 14px; box-shadow: 0 2px 10px rgba(2,8,23,.06); }
-.kpi .title { font-size: 12px; color: #64748b; font-weight: 800; }
-.kpi .value { font-size: 28px; font-weight: 900; margin-top: 6px; }
-.kpi .delta { margin-top: 4px; font-weight: 900; display: flex; align-items: center; gap: 6px; }
-.kpi .delta.up { color: #118d57; }
-.kpi .delta.down { color: #d32f2f; }
+/* Reduce top padding to bring title up */
+.block-container {
+    padding-top: 1rem;
+}
+/* KPI card styling */
+.kpi {
+    background: #fff;
+    border: 1px solid #e6e8ee;
+    border-radius: 12px;
+    padding: 12px 14px;
+    box-shadow: 0 2px 10px rgba(2,8,23,.06);
+}
+.kpi .title {
+    font-size: 12px;
+    color: #64748b;
+    font-weight: 800;
+}
+.kpi .value {
+    font-size: 28px;
+    font-weight: 900;
+    margin-top: 6px;
+}
+/* Slightly larger YASH logo */
+.yash-header-logo {
+    height: 60px !important;
+    max-height: 60px !important;
+    width: auto !important;
+    object-fit: contain !important;
+}
+/* Adjust date/vendor/preset row */
+[data-testid="column"]:has(div[data-testid="stDateInput"]),
+[data-testid="column"]:has(div[data-testid="stSelectbox"]) {
+    min-width: 180px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1683,7 +1755,7 @@ with col_nav:
             st.session_state.page = "Invoices"
             st.rerun()
 with col_logo:
-    st.image(logo_url, width=50)
+    st.image(logo_url, width=50)  # width is overridden by CSS
 st.markdown("<p style='font-size: 0.9rem; color: gray; margin-top: -0.5rem;'>P2P Analytics</p>", unsafe_allow_html=True)
 st.markdown("---")
 
