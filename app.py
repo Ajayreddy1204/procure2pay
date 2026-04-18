@@ -1,6 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# Fully responsive Needs Attention cards, colored tabs, clickable tiles
+# Complete: Dashboard (responsive Needs Attention), Genie, Forecast, Invoices
 # ================================
 
 import streamlit as st
@@ -41,10 +41,6 @@ def get_aws_session():
 @st.cache_resource
 def get_bedrock_runtime():
     return get_aws_session().client("bedrock-runtime", region_name=ATHENA_REGION)
-
-@st.cache_resource
-def get_athena_client():
-    return get_aws_session().client("athena", region_name=ATHENA_REGION)
 
 @st.cache_data(ttl=300, show_spinner=False)
 def run_query_cached(sql: str) -> pd.DataFrame:
@@ -154,13 +150,12 @@ def clean_invoice_number(inv_num):
     except:
         return str(inv_num)
 
-# Custom KPI tile with colored arrow
 def kpi_tile(title: str, value: str, delta_text: str = None, is_positive: bool = True):
     if delta_text and delta_text != "0%":
         if "↑" in delta_text:
-            color = "#118d57"  # green
+            color = "#118d57"
         elif "↓" in delta_text:
-            color = "#d32f2f"  # red
+            color = "#d32f2f"
         else:
             color = "#64748b"
         delta_html = f'<div style="margin-top: 4px; font-weight: 900; color: {color};">{delta_text}</div>'
@@ -660,7 +655,7 @@ def set_cache(question, response):
     conn.commit()
     conn.close()
 
-# ---------------------------- DASHBOARD PAGE (with redesigned Needs Attention) ----------------------------
+# ---------------------------- DASHBOARD PAGE ----------------------------
 def render_dashboard():
     if "preset" not in st.session_state:
         st.session_state.preset = "Last 30 Days"
@@ -671,7 +666,6 @@ def render_dashboard():
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
 
-    # Date, Vendor, Preset row (slightly narrower for alignment)
     col_date, col_vendor, col_preset = st.columns([1.4, 1.4, 2.2])
     with col_date:
         date_range = st.date_input("Date Range", value=st.session_state.date_range, format="YYYY-MM-DD", label_visibility="collapsed")
@@ -722,7 +716,6 @@ def render_dashboard():
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
 
-    # ----- KPI queries (unchanged) -----
     cur_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -805,7 +798,6 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0,"auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
-    # Row 1: 4 KPIs
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         kpi_tile("TOTAL SPEND", abbr_currency(cur_spend), spend_delta, spend_up)
@@ -816,7 +808,6 @@ def render_dashboard():
     with col4:
         kpi_tile("ACTIVE VENDORS", f"{cur_active_vendors:,}", active_vendors_delta, active_vendors_up)
 
-    # Row 2: 4 KPIs
     col5, col6, col7, col8 = st.columns(4)
     with col5:
         kpi_tile("PENDING INVOICES", f"{cur_pending:,}", pending_delta, pending_up)
@@ -828,10 +819,8 @@ def render_dashboard():
         kpi_tile("AUTOPROCESSED %", f"{auto_rate:.1f}%")
     st.markdown("---")
 
-    # ----- NEEDS ATTENTION (redesigned with tabs and clickable cards) -----
+    # Needs Attention
     st.subheader("Needs Attention")
-
-    # Fetch counts for each tab
     counts_sql = f"""
         SELECT
             SUM(CASE WHEN f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE' THEN 1 ELSE 0 END) AS overdue_count,
@@ -846,7 +835,6 @@ def render_dashboard():
     disputed_count = safe_int(cnt_df.loc[0,"disputed_count"]) if not cnt_df.empty else 0
     due_count = safe_int(cnt_df.loc[0,"due_count"]) if not cnt_df.empty else 0
 
-    # Tab buttons with counts and active state styling
     tab_cols = st.columns(3)
     active_tab = st.session_state.na_tab
     with tab_cols[0]:
@@ -883,7 +871,6 @@ def render_dashboard():
             st.session_state.na_page = 0
             st.rerun()
 
-    # SQL query based on active tab
     if active_tab == "Overdue":
         attention_sql = f"""
             SELECT
@@ -901,7 +888,7 @@ def render_dashboard():
             ORDER BY f.due_date ASC
         """
         status_label = "Overdue"
-        bg_color = "#fef2f2"  # light red
+        bg_color = "#fef2f2"
         border_color = "#fecaca"
     elif active_tab == "Disputed":
         attention_sql = f"""
@@ -919,9 +906,9 @@ def render_dashboard():
             ORDER BY f.due_date ASC
         """
         status_label = "Disputed"
-        bg_color = "#fffbeb"  # light yellow
+        bg_color = "#fffbeb"
         border_color = "#fde68a"
-    else:  # Due
+    else:
         attention_sql = f"""
             SELECT
                 f.invoice_number,
@@ -939,7 +926,7 @@ def render_dashboard():
             ORDER BY f.due_date ASC
         """
         status_label = "Due soon"
-        bg_color = "#eff6ff"  # light blue
+        bg_color = "#eff6ff"
         border_color = "#bfdbfe"
 
     attention_df = run_query(attention_sql)
@@ -952,7 +939,7 @@ def render_dashboard():
         end_idx = min(start_idx + items_per_page, total_items)
         page_df = attention_df.iloc[start_idx:end_idx]
 
-        # Custom CSS for responsive grid and card styling
+        # CSS for responsive grid and cards
         st.markdown("""
         <style>
         .na-grid {
@@ -970,6 +957,9 @@ def render_dashboard():
             cursor: pointer;
             transition: all 0.2s ease;
             box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            text-decoration: none;
+            display: block;
+            color: inherit;
         }
         .na-card:hover {
             transform: translateY(-2px);
@@ -1022,55 +1012,18 @@ def render_dashboard():
         </style>
         """, unsafe_allow_html=True)
 
-        # Generate HTML grid
-        cards_html = '<div class="na-grid">'
-        for _, row in page_df.iterrows():
-            inv_num = clean_invoice_number(row['invoice_number'])
-            sub_id = str(row.get('sub_id', '')) if pd.notna(row.get('sub_id')) else ''
-            amount = safe_number(row['amount'])
-            vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else 'Unknown'
-            due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ''
-            # Choose status badge color
-            if status_label == "Overdue":
-                badge_color = "#dc2626"
-                badge_bg = "#fee2e2"
-            elif status_label == "Disputed":
-                badge_color = "#d97706"
-                badge_bg = "#fef3c7"
-            else:
-                badge_color = "#2563eb"
-                badge_bg = "#dbeafe"
-
-            cards_html += f'''
-            <div class="na-card" style="--card-bg:{bg_color}; --card-border:{border_color};" onclick="window.location.href='?page=Invoices&search_invoice={inv_num}'">
-                <div class="invoice-pill">{inv_num}</div>
-                <div class="sub-id">{sub_id}</div>
-                <div class="status-badge" style="background:{badge_bg}; color:{badge_color};">{status_label}</div>
-                <div class="amount">{abbr_currency(amount)}</div>
-                <div class="vendor-name">{vendor}</div>
-                <div class="due-date">Due: {due_date}</div>
-            </div>
-            '''
-        cards_html += '</div>'
-
-        # Inject HTML (Streamlit does not execute JavaScript inside markdown, so we need to use st.components.v1.html)
-        # Since we cannot use JavaScript onclick reliably with st.markdown, we'll use st.button inside each card instead.
-        # We'll rewrite the grid using Streamlit columns and buttons for full clickability.
-        # The above HTML is a fallback, but we'll implement a pure Streamlit version for better interactivity.
-
-        # Let's rebuild the grid using st.columns and st.button (more reliable)
-        # We'll create rows of 4 cards
-        rows = [page_df.iloc[i:i+4] for i in range(0, len(page_df), 4)]
-        for row in rows:
+        # Generate clickable cards
+        for i in range(0, len(page_df), 4):
             cols = st.columns(4)
-            for col_idx, (_, card) in enumerate(zip(cols, row.iterrows())):
-                with cols[col_idx]:
-                    inv_num = clean_invoice_number(card[1]['invoice_number'])
-                    sub_id = str(card[1].get('sub_id', '')) if pd.notna(card[1].get('sub_id')) else ''
-                    amount = safe_number(card[1]['amount'])
-                    vendor = card[1]['vendor_name'] if pd.notna(card[1]['vendor_name']) else 'Unknown'
-                    due_date = card[1]['due_date'].strftime('%Y-%m-%d') if pd.notna(card[1]['due_date']) else ''
-                    # Choose badge color
+            for j in range(4):
+                if i + j < len(page_df):
+                    row = page_df.iloc[i + j]
+                    inv_num = clean_invoice_number(row['invoice_number'])
+                    sub_id = str(row.get('sub_id', '')) if pd.notna(row.get('sub_id')) else ''
+                    amount = safe_number(row['amount'])
+                    vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else 'Unknown'
+                    due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ''
+                    # badge colors
                     if status_label == "Overdue":
                         badge_bg = "#fee2e2"
                         badge_color = "#dc2626"
@@ -1080,31 +1033,22 @@ def render_dashboard():
                     else:
                         badge_bg = "#dbeafe"
                         badge_color = "#2563eb"
-                    # Create a container with the card style, and inside a button that covers the whole card
-                    # We'll use st.markdown for the card content and an invisible button overlay? Better: make the whole card a button.
-                    # Streamlit buttons cannot contain HTML, so we'll use a column with a button that shows the card content as markdown.
-                    # We'll use a button with a large label that includes HTML? Not ideal.
-                    # Simpler: use st.markdown to display the card and a separate "View" button.
-                    # But requirement: the whole card should be clickable. We'll use st.button and inside the button we put the card HTML.
-                    # However st.button does not support HTML inside its label. So we'll use a container with a button that spans full width and use markdown for content.
-                    # Actually we can use st.markdown with a link that looks like a card, but it will navigate via a hyperlink (not Streamlit rerun).
-                    # We'll use st.markdown with an <a> tag that sets the URL with query parameters. That is acceptable.
-                    # Let's generate a link instead of a button.
-                    link_url = f"?page=Invoices&search_invoice={inv_num}"
-                    st.markdown(f'''
-                        <a href="{link_url}" style="text-decoration: none;">
-                            <div class="na-card" style="--card-bg:{bg_color}; --card-border:{border_color}; background-color:{bg_color}; border:1px solid {border_color};">
-                                <div class="invoice-pill">{inv_num}</div>
-                                <div class="sub-id">{sub_id}</div>
-                                <div class="status-badge" style="background:{badge_bg}; color:{badge_color};">{status_label}</div>
-                                <div class="amount">{abbr_currency(amount)}</div>
-                                <div class="vendor-name">{vendor}</div>
-                                <div class="due-date">Due: {due_date}</div>
-                            </div>
-                        </a>
-                    ''', unsafe_allow_html=True)
+                    with cols[j]:
+                        link_url = f"?page=Invoices&search_invoice={inv_num}"
+                        st.markdown(f'''
+                            <a href="{link_url}" style="text-decoration: none;">
+                                <div class="na-card" style="--card-bg:{bg_color}; --card-border:{border_color}; background-color:{bg_color}; border:1px solid {border_color};">
+                                    <div class="invoice-pill">{inv_num}</div>
+                                    <div class="sub-id">{sub_id}</div>
+                                    <div class="status-badge" style="background:{badge_bg}; color:{badge_color};">{status_label}</div>
+                                    <div class="amount">{abbr_currency(amount)}</div>
+                                    <div class="vendor-name">{vendor}</div>
+                                    <div class="due-date">Due: {due_date}</div>
+                                </div>
+                            </a>
+                        ''', unsafe_allow_html=True)
 
-        # Pagination controls
+        # Pagination
         col_prev, col_info, col_next = st.columns([1,2,1])
         with col_prev:
             if st.button("← Prev", disabled=(st.session_state.na_page == 0)):
@@ -1120,7 +1064,7 @@ def render_dashboard():
         st.info("No attention items found.")
     st.markdown("---")
 
-    # Analytics charts (unchanged)
+    # Analytics charts
     st.subheader("Analytics")
     chart_col1, chart_col2, chart_col3 = st.columns(3)
 
@@ -1176,12 +1120,7 @@ def render_dashboard():
         else:
             st.info("No trend data")
 
-# ---------------------------- GENIE PAGE (unchanged, truncated for brevity) ----------------------------
-# (Keep the existing render_genie function exactly as before – it's too long to repeat but fully functional)
-# For the final answer, we'll include the full function as in previous messages.
-# Since the previous code already had it, we'll assume it's present. To save space, I'll paste a placeholder comment.
-# In the actual final answer, you must include the complete render_genie function from the previous working version.
-
+# ---------------------------- GENIE PAGE (full implementation) ----------------------------
 def process_custom_query(query: str) -> dict:
     sql, _ = generate_sql(query)
     if not sql or not is_safe_sql(sql):
@@ -1193,12 +1132,251 @@ def process_custom_query(query: str) -> dict:
     return {"layout": "sql", "sql": sql, "df": df.to_dict(orient="records"), "question": query}
 
 def render_genie():
-    # (Full render_genie function as in previous final code – keep unchanged)
-    # I'll include a minimal version here to avoid repetition, but the actual answer must contain the full function.
-    # For brevity, I'll state that the function remains identical to the previous final version.
-    st.markdown("### AI Assistant")
-    st.info("Genie page is fully functional. Please refer to the previous working code for the complete implementation.")
-    # In production, replace this with the full render_genie code.
+    st.markdown("""
+    <style>
+    .kpi-card { background: #fff; border: 1px solid #e6e8ee; border-radius: 12px; padding: 12px; }
+    .kpi-title { font-size: 12px; color: #64748b; font-weight: 800; }
+    .kpi-value { font-size: 28px; font-weight: 900; margin-top: 6px; }
+    .chat-message-user { background: #1459d2; color: white; padding: 10px 14px; border-radius: 16px; margin: 6px 0; }
+    .chat-message-assistant { background: #f1f5f9; color: #0f172a; padding: 10px 14px; border-radius: 16px; margin: 6px 0; }
+    .cache-badge { background: #eff6ff; color: #1d4ed8; border-radius: 999px; font-size: 11px; padding: 2px 9px; display: inline-block; margin-bottom: 4px; }
+    .chat-scrollable { max-height: 400px; overflow-y: auto; padding-right: 8px; }
+    .anomaly-banner { background: #fffbeb; border-left: 4px solid #f59e0b; border-radius: 8px; padding: 10px 16px; margin-bottom: 16px; font-size: 14px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    if "genie_session_id" not in st.session_state:
+        st.session_state.genie_session_id = str(uuid.uuid4())
+        st.session_state.genie_messages = []
+        st.session_state.genie_turn_index = 0
+    if "genie_response" not in st.session_state:
+        st.session_state.genie_response = None
+    if "selected_analysis" not in st.session_state:
+        st.session_state.selected_analysis = None
+    if "last_custom_query" not in st.session_state:
+        st.session_state.last_custom_query = ""
+
+    auto_query = st.session_state.pop("auto_run_query", None)
+    if auto_query:
+        st.session_state.selected_analysis = "custom"
+        st.session_state.last_custom_query = auto_query
+        with st.spinner("Running query..."):
+            result = process_custom_query(auto_query)
+            st.session_state.genie_response = result
+            st.session_state.genie_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
+            if result.get("layout") == "sql":
+                st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
+                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", auto_query)
+                st.session_state.genie_turn_index += 1
+                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
+                st.session_state.genie_turn_index += 1
+                save_question(auto_query, "custom")
+                set_cache(auto_query, result)
+            else:
+                st.session_state.genie_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
+        st.rerun()
+
+    # Quick analysis tiles
+    st.markdown("## Welcome to ProcureIQ Genie")
+    st.markdown("Let Genie run one of these quick analyses for you.")
+    cols = st.columns(4)
+    quick_options = {
+        "spending_overview": ("Spending Overview", "Track total spend, monthly trends and major changes"),
+        "vendor_analysis": ("Vendor Analysis", "Understand vendor-wise spend, concentration, and dependency"),
+        "payment_performance": ("Payment Performance", "Identify delays, late payments, and cycle time issues"),
+        "invoice_aging": ("Invoice Aging", "See overdue invoices, risk buckets, and problem areas")
+    }
+    for idx, (key, (title, desc)) in enumerate(quick_options.items()):
+        with cols[idx]:
+            with st.container(border=True):
+                st.markdown(f"**{title}**")
+                st.caption(desc)
+                if st.button(f"Ask Genie", key=f"quick_{key}", use_container_width=True):
+                    st.session_state.genie_messages = []
+                    st.session_state.genie_turn_index = 0
+                    st.session_state.selected_analysis = key
+                    st.session_state.last_custom_query = title
+                    with st.spinner(f"Running {title}..."):
+                        result = run_quick_analysis(key)
+                        st.session_state.genie_response = result
+                        st.session_state.genie_messages.append({"role": "user", "content": title, "timestamp": datetime.now()})
+                        st.session_state.genie_messages.append({"role": "assistant", "content": f"Analysis for {title} complete.", "response": result, "timestamp": datetime.now()})
+                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", title)
+                        st.session_state.genie_turn_index += 1
+                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", source="quick")
+                        st.session_state.genie_turn_index += 1
+                        save_question(title, key)
+                    st.rerun()
+    st.markdown("---")
+
+    left_col, right_col = st.columns([0.35, 0.65], gap="medium")
+
+    with left_col:
+        with st.expander("Saved insights", expanded=False):
+            insights = get_saved_insights_cached(page="genie")
+            if insights:
+                for ins in insights:
+                    if st.button(ins["title"], key=f"insight_{ins['id']}", use_container_width=True):
+                        st.session_state.selected_analysis = "custom"
+                        st.session_state.last_custom_query = ins["question"]
+                        with st.spinner("Running saved insight..."):
+                            result = process_custom_query(ins["question"])
+                            st.session_state.genie_response = result
+                            st.session_state.genie_messages.append({"role": "user", "content": ins["question"], "timestamp": datetime.now()})
+                            st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", ins["question"])
+                            st.session_state.genie_turn_index += 1
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
+                            st.session_state.genie_turn_index += 1
+                            save_question(ins["question"], "custom")
+                            set_cache(ins["question"], result)
+                        st.rerun()
+            else:
+                st.caption("Save any Genie answer to see it here.")
+
+        with st.expander("Frequently asked by you", expanded=False):
+            faqs = get_frequent_questions_by_user_cached(5)
+            if faqs:
+                for faq in faqs:
+                    if st.button(f"{faq['query'][:50]} ({faq['count']})", key=f"faq_user_{faq['query']}", use_container_width=True):
+                        st.session_state.selected_analysis = "custom"
+                        st.session_state.last_custom_query = faq["query"]
+                        with st.spinner("Running..."):
+                            result = process_custom_query(faq["query"])
+                            st.session_state.genie_response = result
+                            st.session_state.genie_messages.append({"role": "user", "content": faq["query"], "timestamp": datetime.now()})
+                            st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", faq["query"])
+                            st.session_state.genie_turn_index += 1
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
+                            st.session_state.genie_turn_index += 1
+                            save_question(faq["query"], "custom")
+                            set_cache(faq["query"], result)
+                        st.rerun()
+            else:
+                st.caption("Your frequent questions will appear here.")
+
+        with st.expander("Most frequent (all)", expanded=False):
+            all_faqs = get_frequent_questions_all_cached(5)
+            if all_faqs:
+                for faq in all_faqs:
+                    st.button(f"{faq['query'][:50]} ({faq['count']})", key=f"faq_all_{faq['query']}", use_container_width=True, disabled=True)
+            else:
+                st.caption("No questions yet.")
+
+    with right_col:
+        st.markdown("### AI Assistant")
+        st.markdown('<div class="chat-scrollable">', unsafe_allow_html=True)
+        for msg in st.session_state.genie_messages:
+            if msg["role"] == "user":
+                st.markdown(f'<div class="chat-message-user"><strong>You</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="chat-message-assistant"><strong>Genie</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
+                if "response" in msg and msg["response"]:
+                    resp = msg["response"]
+                    if resp.get("layout") == "quick":
+                        metrics = resp.get("metrics", {})
+                        if metrics:
+                            metric_cols = st.columns(len(metrics))
+                            for i, (k, v) in enumerate(metrics.items()):
+                                with metric_cols[i]:
+                                    if k == "total_ytd":
+                                        st.metric("Total Spend (YTD)", abbr_currency(v))
+                                    elif k == "mom_pct":
+                                        st.metric("MoM Change", _safe_pct_str(v))
+                                    elif k == "qoq_pct":
+                                        st.metric("QoQ Change", _safe_pct_str(v))
+                                    elif k == "top5_pct":
+                                        st.metric("Top 5 Vendors", f"{v:.0f}% of total spend")
+                                    else:
+                                        st.metric(k.replace("_"," ").title(), str(v))
+
+                        anomaly = resp.get("anomaly")
+                        if anomaly:
+                            st.markdown(f'<div class="anomaly-banner">⚠️ <strong>Anomaly Detected</strong><br/>{html.escape(anomaly)}</div>', unsafe_allow_html=True)
+
+                        monthly_df = resp.get("monthly_df")
+                        if monthly_df is not None and not monthly_df.empty and "MONTHLY_SPEND" in monthly_df.columns:
+                            st.subheader("Spending Trends")
+                            alt_line_monthly(monthly_df.rename(columns={"MONTH":"MONTH", "MONTHLY_SPEND":"VALUE"}), month_col="MONTH", value_col="VALUE", height=300, title="Monthly Spend Trend (Last 12 Months)")
+
+                        if monthly_df is not None and not monthly_df.empty and "INVOICE_COUNT" in monthly_df.columns:
+                            st.subheader("Invoice volume by month")
+                            alt_bar(monthly_df, x="MONTH", y="INVOICE_COUNT", color="#1e88e5", height=250)
+
+                        if monthly_df is not None and not monthly_df.empty and "VENDOR_COUNT" in monthly_df.columns:
+                            st.subheader("Active vendors by month")
+                            alt_bar(monthly_df, x="MONTH", y="VENDOR_COUNT", color="#7c3aed", height=250)
+
+                        vendors_df = resp.get("vendors_df")
+                        if vendors_df is not None and not vendors_df.empty and "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
+                            st.subheader("Top 10 Vendors by Spend (YTD)")
+                            alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=400)
+
+                        st.subheader("Prescriptive — Recommendations & next steps")
+                        prescriptive_text = generate_prescriptive_from_quick(resp)
+                        if prescriptive_text:
+                            st.markdown(f'<div style="font-size:14px; line-height:1.6;">{prescriptive_text}</div>', unsafe_allow_html=True)
+                        else:
+                            st.info("No prescriptive insights available.")
+
+                        with st.expander("Query outputs"):
+                            st.caption("Show full result tables")
+                            if monthly_df is not None and not monthly_df.empty:
+                                st.dataframe(monthly_df, use_container_width=True)
+                            if vendors_df is not None and not vendors_df.empty:
+                                st.dataframe(vendors_df, use_container_width=True)
+                        with st.expander("Show SQL used"):
+                            sql_dict = resp.get("sql", {})
+                            for name, sql_text in sql_dict.items():
+                                st.markdown(f"**{name}**")
+                                st.code(sql_text, language="sql")
+
+                    elif resp.get("layout") == "sql":
+                        df = pd.DataFrame(resp["df"])
+                        st.dataframe(df, use_container_width=True)
+                        chart = auto_chart(df)
+                        if chart:
+                            st.altair_chart(chart, use_container_width=True)
+                        with st.expander("View SQL"):
+                            st.code(resp["sql"], language="sql")
+                    elif resp.get("layout") == "error":
+                        st.error(resp.get("message", "Unknown error"))
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        with st.form(key="genie_form", clear_on_submit=True):
+            col_input, col_btn = st.columns([0.85, 0.15])
+            with col_input:
+                user_question = st.text_input("Ask a question", placeholder="e.g., Show me total spend YTD", label_visibility="collapsed")
+            with col_btn:
+                submitted = st.form_submit_button("Send", type="primary")
+            if submitted and user_question:
+                with st.spinner("Generating SQL..."):
+                    cached = get_cache(user_question)
+                    if cached:
+                        st.session_state.genie_response = cached
+                        st.session_state.genie_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
+                        st.session_state.genie_messages.append({"role": "assistant", "content": "Answer from cache.", "response": cached, "timestamp": datetime.now()})
+                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
+                        st.session_state.genie_turn_index += 1
+                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Answer from cache.", source="cache")
+                        st.session_state.genie_turn_index += 1
+                        save_question(user_question, "custom")
+                    else:
+                        result = process_custom_query(user_question)
+                        if result.get("layout") == "sql":
+                            set_cache(user_question, result)
+                            st.session_state.genie_response = result
+                            st.session_state.genie_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
+                            st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
+                            st.session_state.genie_turn_index += 1
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
+                            st.session_state.genie_turn_index += 1
+                            save_question(user_question, "custom")
+                        else:
+                            st.error(result.get("message", "Query failed"))
+                st.rerun()
 
 def generate_prescriptive_from_quick(resp: dict) -> str:
     insights = []
@@ -1335,7 +1513,6 @@ def render_forecast():
     else:
         st.info("No cash flow forecast data available.")
 
-    # Action Playbook
     st.markdown("---")
     st.markdown("### Action Playbook")
     st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late.")
@@ -1351,7 +1528,6 @@ def render_forecast():
             st.session_state.page = "Genie"
             st.rerun()
 
-    # GR/IR Reconciliation
     st.markdown("---")
     st.subheader("GR/IR Reconciliation")
     tab1, tab2 = st.tabs(["Outstanding Balance", "Aging Analysis"])
