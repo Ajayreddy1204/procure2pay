@@ -1,6 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# OPTIMIZED VERSION: Full caching, minimal redundant queries
+# OPTIMIZED VERSION: Full caching, no Snowflake, pure AWS
 # ================================
 
 import streamlit as st
@@ -21,7 +21,6 @@ from typing import Optional, Dict, Any, List, Union
 from decimal import Decimal
 from difflib import SequenceMatcher
 from functools import lru_cache
-import time
 
 # ---------------------------- Page config ----------------------------
 st.set_page_config(
@@ -63,7 +62,6 @@ def run_query_cached(sql: str) -> pd.DataFrame:
         st.error(f"Athena query failed: {e}\nSQL: {sql[:500]}")
         return pd.DataFrame()
 
-# Alias for backward compatibility
 run_query = run_query_cached
 
 # ---------------------------- Helper functions (memoized) ----------------------------
@@ -601,7 +599,6 @@ def save_chat_message(session_id, turn_index, role, content, sql_used="", source
               (session_id, turn_index, role, content, sql_used, source, datetime.now()))
     conn.commit()
     conn.close()
-    # Invalidate caches that depend on question history (but not needed for simple insert)
 
 def save_question(query, analysis_type):
     norm = query.lower().strip()
@@ -612,7 +609,6 @@ def save_question(query, analysis_type):
               (norm, query, user, analysis_type, datetime.now()))
     conn.commit()
     conn.close()
-    # Invalidate cached frequent questions
     get_frequent_questions_by_user_cached.clear()
     get_frequent_questions_all_cached.clear()
 
@@ -673,7 +669,6 @@ def render_dashboard():
             st.session_state.preset = "Custom"
             st.rerun()
     with col_vendor:
-        # Cache vendor list in session state (refresh only when date range changes)
         vendor_cache_key = f"vendor_list_{rng_start}_{rng_end}"
         if vendor_cache_key not in st.session_state:
             vendor_sql = f"""
@@ -712,7 +707,6 @@ def render_dashboard():
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
 
-    # Single query for current KPIs
     cur_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -759,7 +753,6 @@ def render_dashboard():
     active_vendors_delta, _ = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, _ = pct_delta(cur_pending, prev_pending)
 
-    # First pass and auto rate queries (can be cached per date range)
     first_pass_sql = f"""
         WITH hist AS (
             SELECT invoice_number,
@@ -972,7 +965,7 @@ def render_dashboard():
         else:
             st.info("No trend data")
 
-# ---------------------------- GENIE PAGE (enhanced with full output) ----------------------------
+# ---------------------------- GENIE PAGE ----------------------------
 def process_custom_query(query: str) -> dict:
     sql, _ = generate_sql(query)
     if not sql or not is_safe_sql(sql):
@@ -1257,7 +1250,7 @@ def generate_prescriptive_from_quick(resp: dict) -> str:
         return "No specific prescriptive insights available based on the data."
     return "<br/>".join(insights[:6])
 
-# ---------------------------- FORECAST PAGE (Cash Flow + GR/IR) ----------------------------
+# ---------------------------- FORECAST PAGE ----------------------------
 def render_forecast():
     st.subheader("Cash Flow Need Forecast")
 
@@ -1424,20 +1417,64 @@ def render_forecast():
         else:
             st.info("No GR/IR aging data found.")
 
-# ---------------------------- INVOICES PAGE (fixed search) ----------------------------
+# ---------------------------- INVOICES PAGE ----------------------------
+def _get_ai_invoice_suggestion(invoice_number: str, inv_row: dict, status_history: str = "") -> str:
+    """Use Bedrock Nova to generate a short, actionable suggestion for the selected invoice."""
+    status = str(inv_row.get("invoice_status", "")).strip()
+    due = inv_row.get("due_date")
+    aging = inv_row.get("aging_days")
+    amount = inv_row.get("invoice_amount")
+    due_str = str(due) if due else "unknown"
+    aging_str = f"{int(aging)} days" if aging is not None else "unknown"
+    amount_str = f"{float(amount):,.2f}" if amount is not None else "unknown"
+
+    is_overdue = False
+    try:
+        if due and status.upper() not in ("PAID", "CLEARED"):
+            due_date = date.fromisoformat(str(due)[:10])
+            is_overdue = due_date < date.today()
+    except Exception:
+        pass
+
+    overdue_context = ""
+    if is_overdue:
+        overdue_context = f"This invoice IS overdue (due date {due_str} has passed and it is not yet paid). "
+    elif status.upper() in ("PAID", "CLEARED"):
+        overdue_context = "This invoice is already PAID/CLEARED. It is NOT overdue. "
+    else:
+        overdue_context = "This invoice is NOT overdue (the due date has not passed yet). "
+
+    prompt = (
+        "Concise procure-to-pay analyst. 2-3 sentences of actionable advice based ONLY on the data below. "
+        f"{overdue_context}"
+        "OPEN & not overdue: say proceed to pay. Overdue: recommend immediate review. PAID: no action. "
+        f"Invoice: {invoice_number}. Status: {status}. Due: {due_str}. Aging: {aging_str}. Amount: {amount_str}."
+    )
+    # Use Bedrock Nova via cached function
+    response = ask_bedrock_cached(prompt, system_prompt="You are a helpful procurement analyst. Provide concise, actionable advice.")
+    if response and len(response.strip()) > 10:
+        return response.strip()
+    # Fallback
+    if status.upper() in ("PAID", "CLEARED"):
+        return f"Invoice {invoice_number} has already been **paid**. No further action is needed."
+    elif is_overdue:
+        return f"Invoice {invoice_number} is **overdue** (due {due_str}). Recommend **immediate review** to avoid penalties."
+    else:
+        return f"Invoice {invoice_number} is {status.lower()} with due date {due_str}. Proceed to pay."
+
 def render_invoices():
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
-    
+
     if "invoice_search_term" not in st.session_state:
         st.session_state.invoice_search_term = ""
-    
+
     prefill = st.session_state.pop("invoice_search_term", None)
     if prefill:
         st.session_state.inv_search_q = clean_invoice_number(prefill)
-    
+
     search_term = st.session_state.get("inv_search_q", "")
-    
+
     col1, col2 = st.columns([3,1])
     with col1:
         user_search = st.text_input(
@@ -1453,14 +1490,13 @@ def render_invoices():
             st.session_state.invoice_search_term = ""
             st.session_state.invoice_status_filter = "All Status"
             st.rerun()
-    
+
     if user_search != search_term:
         st.session_state.inv_search_q = user_search
         st.rerun()
-    
+
     col_vendor, col_status = st.columns(2)
     with col_vendor:
-        # Cache vendor list for invoice page (static)
         if "inv_vendor_list" not in st.session_state:
             vendor_df = run_query(f"SELECT DISTINCT vendor_name FROM {DATABASE}.dim_vendor_vw ORDER BY vendor_name")
             vendor_list = ["All Vendors"] + vendor_df["vendor_name"].tolist() if not vendor_df.empty else ["All Vendors"]
@@ -1476,7 +1512,7 @@ def render_invoices():
         selected_status = selected_status_display
         if selected_status == "DUE_NEXT_30":
             selected_status = "OPEN"
-    
+
     where = []
     if user_search:
         clean_search = clean_invoice_number(user_search)
@@ -1490,7 +1526,7 @@ def render_invoices():
         else:
             where.append(f"UPPER(f.invoice_status) = '{selected_status}'")
     where_sql = " AND ".join(where) if where else "1=1"
-    
+
     query = f"""
         SELECT DISTINCT
             f.invoice_number AS invoice_number,
@@ -1507,7 +1543,7 @@ def render_invoices():
         LIMIT 500
     """
     df = run_query(query)
-    
+
     if not df.empty:
         df_display = df.rename(columns={
             'invoice_number': 'INVOICE NUMBER',
@@ -1519,12 +1555,12 @@ def render_invoices():
             'status': 'STATUS'
         })
         st.dataframe(df_display, use_container_width=True, height=400)
-        
+
         if user_search and len(df) == 1:
             inv_num = clean_invoice_number(df.iloc[0,0])
             st.markdown("---")
             st.subheader(f"Invoice Details: {inv_num}")
-            
+
             details_sql = f"""
                 SELECT
                     f.invoice_number,
@@ -1544,7 +1580,7 @@ def render_invoices():
             details_df = run_query(details_sql)
             if not details_df.empty:
                 st.dataframe(details_df, use_container_width=True)
-            
+
             hist_sql = f"""
                 SELECT
                     invoice_number,
@@ -1559,7 +1595,7 @@ def render_invoices():
             if not hist_df.empty:
                 st.subheader("Status History")
                 st.dataframe(hist_df, use_container_width=True)
-            
+
             vendor_sql = f"""
                 SELECT DISTINCT
                     v.vendor_id,
@@ -1586,7 +1622,7 @@ def render_invoices():
             if not vendor_df.empty:
                 st.subheader("Vendor Info")
                 st.dataframe(vendor_df, use_container_width=True)
-            
+
             company_sql = f"""
                 SELECT DISTINCT
                     f.company_code,
@@ -1603,7 +1639,7 @@ def render_invoices():
             if not company_df.empty:
                 st.subheader("Company Info")
                 st.dataframe(company_df, use_container_width=True)
-            
+
             st.subheader("Genie insights")
             inv_row = details_df.iloc[0].to_dict() if not details_df.empty else {}
             status_history = hist_df[["status", "effective_date", "status_notes"]].head(5).to_string(index=False) if not hist_df.empty else ""
@@ -1611,30 +1647,6 @@ def render_invoices():
             st.markdown(f'<div style="background:#f0f9ff; border-left:4px solid #1459d2; padding:12px; border-radius:8px;">{suggestion}</div>', unsafe_allow_html=True)
     else:
         st.info("No invoices found. Try a different search term.")
-
-def _get_ai_invoice_suggestion(invoice_number: str, inv_row: dict, status_history: str = "") -> str:
-    status = str(inv_row.get("invoice_status", "")).strip()
-    due = inv_row.get("due_date")
-    aging = inv_row.get("aging_days")
-    amount = inv_row.get("invoice_amount")
-    due_str = str(due) if due else "unknown"
-    aging_str = f"{int(aging)} days" if aging is not None else "unknown"
-    amount_str = f"{float(amount):,.2f}" if amount is not None else "unknown"
-    
-    is_overdue = False
-    try:
-        if due and status.upper() not in ("PAID", "CLEARED"):
-            due_date = date.fromisoformat(str(due)[:10])
-            is_overdue = due_date < date.today()
-    except Exception:
-        pass
-    
-    if status.upper() in ("PAID", "CLEARED"):
-        return f"Invoice {invoice_number} has already been **paid**. No further action is needed."
-    elif is_overdue:
-        return f"Invoice {invoice_number} is **overdue** (due {due_str}). Recommend **immediate review** to avoid penalties."
-    else:
-        return f"Invoice {invoice_number} is {status.lower()} with due date {due_str}. Proceed to pay."
 
 # ---------------------------- Main App Layout ----------------------------
 st.markdown("""
