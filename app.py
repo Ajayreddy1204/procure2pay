@@ -1,6 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# Fixed: DATE_PARSE for GR/IR trend chart, all other features intact
+# Added GR/IR Clearing Playbook in Forecast tab
 # ================================
 
 import streamlit as st
@@ -1423,7 +1423,7 @@ def generate_prescriptive_from_quick(resp: dict) -> str:
         return "No specific prescriptive insights available based on the data."
     return "<br/>".join(insights[:6])
 
-# ---------------------------- FORECAST PAGE (with fixed date conversion) ----------------------------
+# ---------------------------- FORECAST PAGE (with GR/IR Clearing Playbook) ----------------------------
 def render_forecast():
     # Get cash flow data
     cf_sql = f"""
@@ -1578,6 +1578,8 @@ def render_forecast():
 
     with tab2:
         st.markdown("#### GR/IR Reconciliation")
+
+        # GR/IR KPIs and position note (same as before)
         grir_summary_sql = f"""
             WITH latest AS (
                 SELECT year, month, invoice_count, total_grir_blnc
@@ -1621,7 +1623,7 @@ def render_forecast():
 
             st.caption(f"GR/IR position for {year:04d}-{month:02d}: {grir_items:,} items outstanding; {pct_over_60:.1f}% of balance and {cnt_over_60:,} items are older than 60 days.")
 
-            # Fixed date conversion using DATE_PARSE
+            # Trend chart (using fixed DATE_PARSE)
             trend_sql = f"""
                 SELECT
                     DATE_PARSE(CAST(year AS VARCHAR) || '-' || LPAD(CAST(month AS VARCHAR), 2, '0') || '-01', '%Y-%m-%d') AS month_date,
@@ -1647,6 +1649,24 @@ def render_forecast():
                     st.dataframe(trend_df, use_container_width=True)
         else:
             st.info("No GR/IR data found.")
+
+        # ---- NEW: GR/IR Clearing Playbook ----
+        st.markdown("---")
+        st.markdown("### GR/IR Clearing Playbook")
+        st.markdown("Each step opens Genie with a pre-built prompt that uses the `gr_ir_outstanding` and related verified queries so you get concrete actions (which POs to clear, where to chase receipts, and how much working capital you can release).")
+
+        clearing_actions = [
+            ("1. Identify top GR/IR hotspots to clear first", "Show GR/IR outstanding balance by month and highlight which recent months have the highest GR/IR balance so we can prioritize clearing."),
+            ("2. Explain likely GR/IR root causes", "Using GR/IR aging and outstanding balance data, explain the likely root-cause buckets (missing goods receipt, invoice not posted, price or quantity mismatch) and for each bucket suggest 2–3 concrete remediation actions."),
+            ("3. Quantify working-capital benefit from clearing old GR/IR", "Estimate the working capital that would be released by clearing all GR/IR items older than 60 and 90 days, by month."),
+            ("4. Draft vendor follow-up messages for top GR/IR items", "Based on GR/IR aging and outstanding balances, draft vendor-facing follow-up templates we can use for high-priority GR/IR items, with realistic subject lines and concise bullet points.")
+        ]
+
+        for label, question in clearing_actions:
+            if st.button(label, use_container_width=True):
+                st.session_state.auto_run_query = question
+                st.session_state.page = "Genie"
+                st.rerun()
 
 # ---------------------------- INVOICES PAGE ----------------------------
 def _get_ai_invoice_suggestion(invoice_number: str, inv_row: dict, status_history: str = "") -> str:
