@@ -4246,7 +4246,7 @@ with col_nav:
             st.session_state.page = "Invoices"
             st.rerun()
 with col_logo:
-    st.image(logo_url, width=50)  # larger logo
+    st.image(logo_url, width=80)  # larger logo (was 50)
 st.markdown("---")
 
 if "page" not in st.session_state:
