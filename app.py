@@ -1,6 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# Added GR/IR Clearing Playbook in Forecast tab
+# Enhanced: Forecast tab buttons now produce Descriptive + Prescriptive responses
 # ================================
 
 import streamlit as st
@@ -208,6 +208,23 @@ Important notes:
 - Always use COALESCE for null amounts.
 - Exclude CANCELLED and REJECTED invoices from spend metrics unless asked.
 - Output only a JSON object with two keys: "sql" containing the SQL query string, and "explanation". Do not include any other text.
+"""
+
+DESCRIPTIVE_PROMPT_TEMPLATE = """
+You are a senior procurement analyst. Based on the user's question and the data returned from the SQL query, write a response with two sections:
+
+1. **Descriptive** – What the data shows. Cite exact numbers, identify trends, and highlight anomalies. Keep it concise (3-5 sentences).
+2. **Prescriptive** – Specific recommended actions and risks based on the data. List 3-5 bullet points. Each bullet must include a specific finding and a concrete action. Avoid generic advice.
+
+User question: {question}
+
+SQL query:
+{sql}
+
+Data (first 10 rows):
+{data_preview}
+
+Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
 """
 
 @lru_cache(maxsize=100)
@@ -1116,8 +1133,9 @@ def render_dashboard():
         else:
             st.info("No trend data")
 
-# ---------------------------- GENIE PAGE ----------------------------
+# ---------------------------- GENIE PAGE (with enhanced analyst responses) ----------------------------
 def process_custom_query(query: str) -> dict:
+    """Generate SQL, run it, then ask Bedrock for descriptive/prescriptive analysis."""
     sql, _ = generate_sql(query)
     if not sql or not is_safe_sql(sql):
         return {"layout": "error", "message": "Failed to generate valid SQL."}
@@ -1125,7 +1143,21 @@ def process_custom_query(query: str) -> dict:
     df = run_query(sql)
     if df.empty:
         return {"layout": "error", "message": "Query returned no data."}
-    return {"layout": "sql", "sql": sql, "df": df.to_dict(orient="records"), "question": query}
+    
+    # Now call Bedrock again to get descriptive + prescriptive insights
+    data_preview = df.head(10).to_string(index=False, max_colwidth=40)
+    prompt = DESCRIPTIVE_PROMPT_TEMPLATE.format(question=query, sql=sql, data_preview=data_preview)
+    analyst_text = ask_bedrock_cached(prompt, system_prompt="You are a helpful procurement analyst. Provide concise, data-driven insights.")
+    
+    # Parse the response into sections (simple markdown)
+    # We'll just store the whole text; the UI will render it.
+    return {
+        "layout": "analyst",
+        "sql": sql,
+        "df": df.to_dict(orient="records"),
+        "question": query,
+        "analyst_response": analyst_text
+    }
 
 def render_genie():
     st.markdown("""
@@ -1224,15 +1256,15 @@ def render_genie():
     if auto_query:
         st.session_state.selected_analysis = "custom"
         st.session_state.last_custom_query = auto_query
-        with st.spinner("Running query..."):
+        with st.spinner("Running query and generating insights..."):
             result = process_custom_query(auto_query)
             st.session_state.genie_response = result
             st.session_state.genie_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
-            if result.get("layout") == "sql":
-                st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
+            if result.get("layout") == "analyst":
+                st.session_state.genie_messages.append({"role": "assistant", "content": "Insights generated.", "response": result, "timestamp": datetime.now()})
                 save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", auto_query)
                 st.session_state.genie_turn_index += 1
-                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
+                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Insights generated.", sql_used=result.get("sql", ""))
                 st.session_state.genie_turn_index += 1
                 save_question(auto_query, "custom")
                 set_cache(auto_query, result)
@@ -1324,6 +1356,7 @@ def render_genie():
                 if "response" in msg and msg["response"]:
                     resp = msg["response"]
                     if resp.get("layout") == "quick":
+                        # Quick analysis output (same as before)
                         metrics = resp.get("metrics", {})
                         if metrics:
                             metric_cols = st.columns(len(metrics))
@@ -1345,6 +1378,24 @@ def render_genie():
                             sql_dict = resp.get("sql", {})
                             for name, sql_text in sql_dict.items():
                                 st.code(sql_text, language="sql")
+                    elif resp.get("layout") == "analyst":
+                        # Display the analyst response (Descriptive + Prescriptive)
+                        analyst_text = resp.get("analyst_response", "")
+                        if analyst_text:
+                            # Try to split into sections for better display (optional)
+                            st.markdown(analyst_text)
+                        else:
+                            st.info("No descriptive analysis available.")
+                        # Show data table
+                        df = pd.DataFrame(resp["df"])
+                        st.dataframe(df, use_container_width=True)
+                        # Auto chart
+                        chart = auto_chart(df)
+                        if chart:
+                            st.altair_chart(chart, use_container_width=True)
+                        # SQL expander
+                        with st.expander("View SQL used"):
+                            st.code(resp["sql"], language="sql")
                     elif resp.get("layout") == "sql":
                         df = pd.DataFrame(resp["df"])
                         st.dataframe(df, use_container_width=True)
@@ -1369,7 +1420,7 @@ def render_genie():
             with col_btn:
                 submitted = st.form_submit_button("→", type="primary")
             if submitted and user_question:
-                with st.spinner("Generating SQL..."):
+                with st.spinner("Generating SQL and insights..."):
                     cached = get_cache(user_question)
                     if cached:
                         st.session_state.genie_response = cached
@@ -1382,14 +1433,14 @@ def render_genie():
                         save_question(user_question, "custom")
                     else:
                         result = process_custom_query(user_question)
-                        if result.get("layout") == "sql":
+                        if result.get("layout") in ("analyst", "sql"):
                             set_cache(user_question, result)
                             st.session_state.genie_response = result
                             st.session_state.genie_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
-                            st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
+                            st.session_state.genie_messages.append({"role": "assistant", "content": "Insights generated.", "response": result, "timestamp": datetime.now()})
                             save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
                             st.session_state.genie_turn_index += 1
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Insights generated.", sql_used=result.get("sql", ""))
                             st.session_state.genie_turn_index += 1
                             save_question(user_question, "custom")
                         else:
@@ -1423,7 +1474,7 @@ def generate_prescriptive_from_quick(resp: dict) -> str:
         return "No specific prescriptive insights available based on the data."
     return "<br/>".join(insights[:6])
 
-# ---------------------------- FORECAST PAGE (with GR/IR Clearing Playbook) ----------------------------
+# ---------------------------- FORECAST PAGE ----------------------------
 def render_forecast():
     # Get cash flow data
     cf_sql = f"""
@@ -1579,7 +1630,7 @@ def render_forecast():
     with tab2:
         st.markdown("#### GR/IR Reconciliation")
 
-        # GR/IR KPIs and position note (same as before)
+        # GR/IR KPIs and position note
         grir_summary_sql = f"""
             WITH latest AS (
                 SELECT year, month, invoice_count, total_grir_blnc
@@ -1623,7 +1674,7 @@ def render_forecast():
 
             st.caption(f"GR/IR position for {year:04d}-{month:02d}: {grir_items:,} items outstanding; {pct_over_60:.1f}% of balance and {cnt_over_60:,} items are older than 60 days.")
 
-            # Trend chart (using fixed DATE_PARSE)
+            # Trend chart
             trend_sql = f"""
                 SELECT
                     DATE_PARSE(CAST(year AS VARCHAR) || '-' || LPAD(CAST(month AS VARCHAR), 2, '0') || '-01', '%Y-%m-%d') AS month_date,
@@ -1650,7 +1701,7 @@ def render_forecast():
         else:
             st.info("No GR/IR data found.")
 
-        # ---- NEW: GR/IR Clearing Playbook ----
+        # GR/IR Clearing Playbook
         st.markdown("---")
         st.markdown("### GR/IR Clearing Playbook")
         st.markdown("Each step opens Genie with a pre-built prompt that uses the `gr_ir_outstanding` and related verified queries so you get concrete actions (which POs to clear, where to chase receipts, and how much working capital you can release).")
