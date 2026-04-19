@@ -2796,6 +2796,7 @@ def render_dashboard():
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
 
+    # Filter bar: Date Range, Vendor, Preset buttons
     col_date, col_vendor, col_preset = st.columns([1.4, 1.4, 2.2])
     with col_date:
         date_range = st.date_input("Date Range", value=st.session_state.date_range, format="YYYY-MM-DD", label_visibility="collapsed")
@@ -2846,6 +2847,7 @@ def render_dashboard():
     p_end_lit = sql_date(p_end)
     vendor_where = build_vendor_where(selected_vendor)
 
+    # KPI queries
     cur_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -2892,6 +2894,7 @@ def render_dashboard():
     active_vendors_delta, active_vendors_up = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, pending_up = pct_delta(cur_pending, prev_pending)
 
+    # First pass invoices rate
     first_pass_sql = f"""
         WITH hist AS (
             SELECT invoice_number,
@@ -2911,6 +2914,7 @@ def render_dashboard():
     fp_inv = safe_int(fp_df.loc[0,"first_pass_inv"]) if not fp_df.empty else 0
     first_pass_rate = (fp_inv / total_inv * 100) if total_inv > 0 else 0
 
+    # Auto‑processed rate
     auto_rate_sql = f"""
         WITH paid_invoices AS (
             SELECT invoice_number, status_notes
@@ -2928,6 +2932,7 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0,"auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0
 
+    # Row 1 KPIs
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         kpi_tile("TOTAL SPEND", abbr_currency(cur_spend), spend_delta, spend_up)
@@ -2938,6 +2943,7 @@ def render_dashboard():
     with col4:
         kpi_tile("ACTIVE VENDORS", f"{cur_active_vendors:,}", active_vendors_delta, active_vendors_up)
 
+    # Row 2 KPIs
     col5, col6, col7, col8 = st.columns(4)
     with col5:
         kpi_tile("PENDING INVOICES", f"{cur_pending:,}", pending_delta, pending_up)
@@ -2950,7 +2956,7 @@ def render_dashboard():
     st.markdown("---")
 
     # Needs Attention
-    st.subheader("Needs Attention")
+    # Counts for tabs
     counts_sql = f"""
         SELECT
             SUM(CASE WHEN f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE' THEN 1 ELSE 0 END) AS overdue_count,
@@ -2965,6 +2971,7 @@ def render_dashboard():
     disputed_count = safe_int(cnt_df.loc[0,"disputed_count"]) if not cnt_df.empty else 0
     due_count = safe_int(cnt_df.loc[0,"due_count"]) if not cnt_df.empty else 0
 
+    st.subheader(f"Needs Attention ({overdue_count + disputed_count + due_count})")
     tab_cols = st.columns(3)
     active_tab = st.session_state.na_tab
     with tab_cols[0]:
@@ -3001,6 +3008,7 @@ def render_dashboard():
             st.session_state.na_page = 0
             st.rerun()
 
+    # Build query for the selected tab
     if active_tab == "Overdue":
         attention_sql = f"""
             SELECT
@@ -3069,6 +3077,7 @@ def render_dashboard():
         end_idx = min(start_idx + items_per_page, total_items)
         page_df = attention_df.iloc[start_idx:end_idx]
 
+        # Card styling
         st.markdown("""
         <style>
         .na-grid {
@@ -3141,6 +3150,7 @@ def render_dashboard():
         </style>
         """, unsafe_allow_html=True)
 
+        # Render cards
         for i in range(0, len(page_df), 4):
             cols = st.columns(4)
             for j in range(4):
@@ -3161,6 +3171,7 @@ def render_dashboard():
                         badge_bg = "#dbeafe"
                         badge_color = "#2563eb"
                     with cols[j]:
+                        # Navigate to Invoices tab with search parameter
                         link_url = f"?page=Invoices&search_invoice={inv_num}"
                         st.markdown(f'''
                             <a href="{link_url}" style="text-decoration: none;">
@@ -3175,6 +3186,7 @@ def render_dashboard():
                             </a>
                         ''', unsafe_allow_html=True)
 
+        # Pagination
         col_prev, col_info, col_next = st.columns([1,2,1])
         with col_prev:
             if st.button("← Prev", disabled=(st.session_state.na_page == 0)):
@@ -3190,7 +3202,7 @@ def render_dashboard():
         st.info("No attention items found.")
     st.markdown("---")
 
-    # Analytics charts
+    # Charts section
     st.subheader("Analytics")
     chart_col1, chart_col2, chart_col3 = st.columns(3)
 
@@ -3825,6 +3837,184 @@ def render_forecast():
                 st.rerun()
 
 # ---------------------------- INVOICES PAGE (Enhanced with Detailed Report View) ----------------------------
+def _render_invoice_detail(inv_row: dict, inv_num: str):
+    """
+    Renders the detailed report-style layout for a single invoice.
+    """
+    # Helper to get values safely
+    def get_val(key, default=""):
+        val = inv_row.get(key, default)
+        if pd.isna(val):
+            return default
+        return val
+
+    # Banner: compute aging days if not present
+    aging_days = get_val("aging_days", 0)
+    try:
+        due_date = inv_row.get("due_date")
+        if due_date and isinstance(due_date, (date, datetime)):
+            aging_days = (date.today() - due_date).days
+    except:
+        pass
+    st.markdown(f"""
+    <div style="background-color: #e9d8fd; border-left: 5px solid #7c3aed; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
+        <strong>🔍 Genie Insights</strong><br/>
+        Recommend immediate review of invoice {inv_num} as it is overdue and has been outstanding for {aging_days} days.
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Invoice Summary Section
+    st.markdown("### Invoice Summary")
+    summary_cols = st.columns(4)
+    with summary_cols[0]:
+        st.metric("Invoice Number", inv_num)
+        st.metric("Invoice Date", get_val("invoice_date", ""))
+    with summary_cols[1]:
+        st.metric("Invoice Amount", abbr_currency(get_val("invoice_amount", 0)))
+        st.metric("PO Number", get_val("po_number", ""))
+    with summary_cols[2]:
+        st.metric("PO Amount", abbr_currency(get_val("po_amount", 0)))
+        st.metric("Due Date", get_val("due_date", ""))
+    with summary_cols[3]:
+        st.metric("Invoice Status", get_val("invoice_status", ""))
+        st.metric("", "")  # placeholder for alignment
+
+    st.markdown("---")
+
+    # Status History Section
+    st.markdown("### Status History")
+    hist_sql = f"""
+        SELECT
+            invoice_number,
+            UPPER(status) AS status,
+            effective_date,
+            status_notes
+        FROM {DATABASE}.invoice_status_history_vw
+        WHERE CAST(invoice_number AS VARCHAR) = '{inv_num}'
+        ORDER BY sequence_nbr
+    """
+    hist_df = run_query(hist_sql)
+    if hist_df.empty:
+        # Provide fallback example rows if no data
+        hist_df = pd.DataFrame([
+            {"INVOICE_NUMBER": inv_num, "STATUS": "OPEN", "EFFECTIVE_DATE": get_val("invoice_date", ""), "STATUS_NOTES": "Invoice opened and assigned for processing. Pending verification of delivery confirmation, invoice accuracy, and appropriate cost center allocation."},
+            {"INVOICE_NUMBER": inv_num, "STATUS": "OVERDUE", "EFFECTIVE_DATE": get_val("due_date", ""), "STATUS_NOTES": "Invoice overdue following standard payment term expiry. Finance team has been notified for priority action. Vendor relations team informed to manage supplier expectations."}
+        ])
+        st.info("Status history not available. Showing example rows.")
+    # Show the table
+    st.dataframe(hist_df, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # Vendor & Company Tabs
+    st.markdown("### Vendor & Company Information")
+    tabs = st.tabs(["Vendor Info", "Company Info"])
+
+    with tabs[0]:
+        # Vendor Info from dim_vendor_vw and fact
+        vendor_sql = f"""
+            SELECT DISTINCT
+                v.vendor_id,
+                v.vendor_name,
+                v.vendor_name_2,
+                v.country_code,
+                v.city,
+                v.postal_code,
+                v.street
+            FROM {DATABASE}.fact_all_sources_vw f
+            LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+            WHERE CAST(f.invoice_number AS VARCHAR) = '{inv_num}'
+            LIMIT 1
+        """
+        vendor_df = run_query(vendor_sql)
+        if not vendor_df.empty:
+            row = vendor_df.iloc[0]
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**Vendor ID:** {row.get('vendor_id', '')}")
+                st.write(f"**Vendor Name:** {row.get('vendor_name', '')}")
+                st.write(f"**Alias/Name 2:** {row.get('vendor_name_2', '')}")
+            with col2:
+                st.write(f"**Country:** {row.get('country_code', '')}")
+                st.write(f"**City:** {row.get('city', '')}")
+                st.write(f"**Postal Code:** {row.get('postal_code', '')}")
+                st.write(f"**Street:** {row.get('street', '')}")
+        else:
+            st.info("Vendor information not available.")
+
+    with tabs[1]:
+        # Company Info from dim_company_code_vw and dim_plant_vw
+        company_sql = f"""
+            SELECT DISTINCT
+                f.company_code,
+                cc.company_name,
+                f.plant_code,
+                plt.plant_name,
+                cc.street,
+                cc.city,
+                cc.postal_code
+            FROM {DATABASE}.fact_all_sources_vw f
+            LEFT JOIN {DATABASE}.dim_company_code_vw cc ON f.company_code = cc.company_code
+            LEFT JOIN {DATABASE}.dim_plant_vw plt ON f.plant_code = plt.plant_code
+            WHERE CAST(f.invoice_number AS VARCHAR) = '{inv_num}'
+            LIMIT 1
+        """
+        company_df = run_query(company_sql)
+        if not company_df.empty:
+            row = company_df.iloc[0]
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**Company Code:** {row.get('company_code', '')}")
+                st.write(f"**Company Name:** {row.get('company_name', '')}")
+                st.write(f"**Plant Code:** {row.get('plant_code', '')}")
+            with col2:
+                st.write(f"**Plant Name:** {row.get('plant_name', '')}")
+                addr_parts = [row.get('street', ''), row.get('city', ''), row.get('postal_code', '')]
+                addr = ", ".join([p for p in addr_parts if p])
+                st.write(f"**Company Address:** {addr}")
+        else:
+            st.info("Company information not available.")
+
+    st.markdown("---")
+
+    # Proceed to Pay Button
+    current_status = get_val("invoice_status", "").upper()
+    # Use session state to remember if we've already paid this invoice
+    paid_key = f"paid_{inv_num}"
+    if st.session_state.get(paid_key, False):
+        st.success("Invoice has been processed and marked as Paid.")
+    else:
+        if current_status == "PAID":
+            st.info("This invoice is already marked as PAID.")
+        else:
+            if st.button("Proceed to Pay", type="primary", key=f"pay_{inv_num}"):
+                # Simulate payment: update status in session, add history row
+                st.session_state[paid_key] = True
+                # Add a new status history row (simulated)
+                new_row = pd.DataFrame([{
+                    "INVOICE_NUMBER": inv_num,
+                    "STATUS": "PAID",
+                    "EFFECTIVE_DATE": date.today(),
+                    "STATUS_NOTES": "Processed via ProcureSpendIQ app"
+                }])
+                # Append to displayed history
+                if "paid_history_override" not in st.session_state:
+                    st.session_state.paid_history_override = {}
+                st.session_state.paid_history_override[inv_num] = new_row
+                st.success("Invoice has been processed and marked as Paid.")
+                st.rerun()
+
+    # If we have a simulated paid history entry, show it appended
+    if st.session_state.get("paid_history_override", {}).get(inv_num) is not None:
+        extra_row = st.session_state.paid_history_override[inv_num]
+        # Combine with existing hist_df (if any) and show again
+        if hist_df is not None and not hist_df.empty:
+            combined = pd.concat([hist_df, extra_row], ignore_index=True)
+        else:
+            combined = extra_row
+        st.markdown("### Updated Status History (including PAID)")
+        st.dataframe(combined, use_container_width=True, hide_index=True)
+
 def render_invoices():
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
@@ -3970,219 +4160,32 @@ def render_invoices():
         })
         st.dataframe(df_display, use_container_width=True, height=400)
 
-        # If only one invoice matches, also show a quick detail expander
+        # If only one invoice matches and we are in search mode, also show a quick detail expander
         if len(df) == 1 and user_search:
             inv_num = clean_invoice_number(df.iloc[0,0])
             with st.expander(f"Quick view for invoice {inv_num}"):
-                _render_invoice_detail(df.iloc[0].to_dict(), inv_num, quick_mode=True)
+                # Fetch full details again for consistency
+                inv_sql = f"""
+                    SELECT
+                        f.invoice_number,
+                        f.posting_date AS invoice_date,
+                        f.invoice_amount_local AS invoice_amount,
+                        f.purchase_order_reference AS po_number,
+                        f.po_amount,
+                        f.due_date,
+                        UPPER(f.invoice_status) AS invoice_status,
+                        f.aging_days
+                    FROM {DATABASE}.fact_all_sources_vw f
+                    WHERE CAST(f.invoice_number AS VARCHAR) = '{inv_num}'
+                    LIMIT 1
+                """
+                quick_df = run_query(inv_sql)
+                if not quick_df.empty:
+                    _render_invoice_detail(quick_df.iloc[0].to_dict(), inv_num)
+                else:
+                    st.info("Could not retrieve invoice details.")
     else:
         st.info("No invoices found. Try a different search term.")
-
-def _render_invoice_detail(inv_row: dict, inv_num: str, quick_mode: bool = False):
-    """
-    Renders the detailed report-style layout for a single invoice.
-    If quick_mode=True, it shows a compact version inside an expander.
-    """
-    if quick_mode:
-        st.write("**Summary**")
-        st.write(f"**Invoice Number:** {inv_num}")
-        st.write(f"**Amount:** {abbr_currency(inv_row.get('invoice_amount', 0))}")
-        st.write(f"**Status:** {inv_row.get('invoice_status', '')}")
-        st.write(f"**Due Date:** {inv_row.get('due_date', '')}")
-        st.write("---")
-        # Optionally show status history in quick mode as well
-        st.write("**Status History (first 5 rows)**")
-        hist_sql = f"""
-            SELECT
-                invoice_number,
-                UPPER(status) AS status,
-                effective_date,
-                status_notes
-            FROM {DATABASE}.invoice_status_history_vw
-            WHERE CAST(invoice_number AS VARCHAR) = '{inv_num}'
-            ORDER BY sequence_nbr
-            LIMIT 5
-        """
-        hist_df = run_query(hist_sql)
-        if not hist_df.empty:
-            st.dataframe(hist_df, use_container_width=True)
-        else:
-            st.info("No status history found.")
-        return
-
-    # ---------- Full Detailed Layout ----------
-    # Helper to get values safely
-    def get_val(key, default=""):
-        val = inv_row.get(key, default)
-        if pd.isna(val):
-            return default
-        return val
-
-    # Banner: compute aging days if not present
-    aging_days = get_val("aging_days", 0)
-    try:
-        due_date = inv_row.get("due_date")
-        if due_date and isinstance(due_date, (date, datetime)):
-            aging_days = (date.today() - due_date).days
-    except:
-        pass
-    st.markdown(f"""
-    <div style="background-color: #e9d8fd; border-left: 5px solid #7c3aed; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
-        <strong>🔍 Genie Insights</strong><br/>
-        Recommend immediate review of invoice {inv_num} as it is overdue and has been outstanding for {aging_days} days.
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Invoice Summary Section
-    st.markdown("### Invoice Summary")
-    summary_cols = st.columns(4)
-    with summary_cols[0]:
-        st.metric("Invoice Number", inv_num)
-        st.metric("Invoice Date", get_val("invoice_date", ""))
-    with summary_cols[1]:
-        st.metric("Invoice Amount", abbr_currency(get_val("invoice_amount", 0)))
-        st.metric("PO Number", get_val("po_number", ""))
-    with summary_cols[2]:
-        st.metric("PO Amount", abbr_currency(get_val("po_amount", 0)))
-        st.metric("Due Date", get_val("due_date", ""))
-    with summary_cols[3]:
-        st.metric("Invoice Status", get_val("invoice_status", ""))
-        # empty for alignment
-        st.metric("", "")
-
-    st.markdown("---")
-
-    # Status History Section
-    st.markdown("### Status History")
-    hist_sql = f"""
-        SELECT
-            invoice_number,
-            UPPER(status) AS status,
-            effective_date,
-            status_notes
-        FROM {DATABASE}.invoice_status_history_vw
-        WHERE CAST(invoice_number AS VARCHAR) = '{inv_num}'
-        ORDER BY sequence_nbr
-    """
-    hist_df = run_query(hist_sql)
-    if hist_df.empty:
-        # Provide fallback example rows if no data
-        hist_df = pd.DataFrame([
-            {"INVOICE_NUMBER": inv_num, "STATUS": "OPEN", "EFFECTIVE_DATE": inv_row.get("invoice_date", ""), "STATUS_NOTES": "Invoice opened and assigned for processing. Pending verification of delivery confirmation, invoice accuracy, and appropriate cost center allocation."},
-            {"INVOICE_NUMBER": inv_num, "STATUS": "OVERDUE", "EFFECTIVE_DATE": inv_row.get("due_date", ""), "STATUS_NOTES": "Invoice overdue following standard payment term expiry. Finance team has been notified for priority action. Vendor relations team informed to manage supplier expectations."}
-        ])
-        st.info("Status history not available. Showing example rows.")
-    # Show the table
-    st.dataframe(hist_df, use_container_width=True, hide_index=True)
-
-    st.markdown("---")
-
-    # Vendor & Company Tabs
-    st.markdown("### Vendor & Company Information")
-    tabs = st.tabs(["Vendor Info", "Company Info"])
-
-    with tabs[0]:
-        # Vendor Info from dim_vendor_vw and fact
-        vendor_sql = f"""
-            SELECT DISTINCT
-                v.vendor_id,
-                v.vendor_name,
-                v.vendor_name_2,
-                v.country_code,
-                v.city,
-                v.postal_code,
-                v.street
-            FROM {DATABASE}.fact_all_sources_vw f
-            LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-            WHERE CAST(f.invoice_number AS VARCHAR) = '{inv_num}'
-            LIMIT 1
-        """
-        vendor_df = run_query(vendor_sql)
-        if not vendor_df.empty:
-            row = vendor_df.iloc[0]
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**Vendor ID:** {row.get('vendor_id', '')}")
-                st.write(f"**Vendor Name:** {row.get('vendor_name', '')}")
-                st.write(f"**Alias/Name 2:** {row.get('vendor_name_2', '')}")
-            with col2:
-                st.write(f"**Country:** {row.get('country_code', '')}")
-                st.write(f"**City:** {row.get('city', '')}")
-                st.write(f"**Postal Code:** {row.get('postal_code', '')}")
-                st.write(f"**Street:** {row.get('street', '')}")
-        else:
-            st.info("Vendor information not available.")
-
-    with tabs[1]:
-        # Company Info from dim_company_code_vw and dim_plant_vw
-        company_sql = f"""
-            SELECT DISTINCT
-                f.company_code,
-                cc.company_name,
-                f.plant_code,
-                plt.plant_name,
-                cc.street,
-                cc.city,
-                cc.postal_code
-            FROM {DATABASE}.fact_all_sources_vw f
-            LEFT JOIN {DATABASE}.dim_company_code_vw cc ON f.company_code = cc.company_code
-            LEFT JOIN {DATABASE}.dim_plant_vw plt ON f.plant_code = plt.plant_code
-            WHERE CAST(f.invoice_number AS VARCHAR) = '{inv_num}'
-            LIMIT 1
-        """
-        company_df = run_query(company_sql)
-        if not company_df.empty:
-            row = company_df.iloc[0]
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**Company Code:** {row.get('company_code', '')}")
-                st.write(f"**Company Name:** {row.get('company_name', '')}")
-                st.write(f"**Plant Code:** {row.get('plant_code', '')}")
-            with col2:
-                st.write(f"**Plant Name:** {row.get('plant_name', '')}")
-                addr_parts = [row.get('street', ''), row.get('city', ''), row.get('postal_code', '')]
-                addr = ", ".join([p for p in addr_parts if p])
-                st.write(f"**Company Address:** {addr}")
-        else:
-            st.info("Company information not available.")
-
-    st.markdown("---")
-
-    # Proceed to Pay Button
-    current_status = get_val("invoice_status", "").upper()
-    # Use session state to remember if we've already paid this invoice
-    paid_key = f"paid_{inv_num}"
-    if st.session_state.get(paid_key, False):
-        st.success("Invoice has been processed and marked as Paid.")
-    else:
-        if current_status == "PAID":
-            st.info("This invoice is already marked as PAID.")
-        else:
-            if st.button("Proceed to Pay", type="primary", key=f"pay_{inv_num}"):
-                # Simulate payment: update status in session, add history row
-                st.session_state[paid_key] = True
-                # Add a new status history row (simulated)
-                new_row = pd.DataFrame([{
-                    "INVOICE_NUMBER": inv_num,
-                    "STATUS": "PAID",
-                    "EFFECTIVE_DATE": date.today(),
-                    "STATUS_NOTES": "Processed via ProcureSpendIQ app"
-                }])
-                # We'll append to the displayed history by merging with existing hist_df
-                # But since hist_df may be from DB, we'll store in session and override display
-                if "paid_history_override" not in st.session_state:
-                    st.session_state.paid_history_override = {}
-                st.session_state.paid_history_override[inv_num] = new_row
-                st.success("Invoice has been processed and marked as Paid.")
-                st.rerun()
-
-    # If we have a simulated paid history entry, show it appended
-    if st.session_state.get("paid_history_override", {}).get(inv_num) is not None:
-        extra_row = st.session_state.paid_history_override[inv_num]
-        # Combine with existing hist_df (if any) and show again
-        combined = pd.concat([hist_df, extra_row], ignore_index=True) if not hist_df.empty else extra_row
-        st.markdown("### Updated Status History (including PAID)")
-        st.dataframe(combined, use_container_width=True, hide_index=True)
 
 # ---------------------------- Main App Layout ----------------------------
 st.markdown("""
@@ -4217,6 +4220,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 logo_url = "https://th.bing.com/th/id/OIP.Vy1yFQtg8-D1SsAxcqqtSgHaE6?w=235&h=180&c=7&r=0&o=7&dpr=1.5&pid=1.7&rm=3"
+
+# Header with logo top right, title left, navigation center
 col_title, col_nav, col_logo = st.columns([1, 3, 1])
 with col_title:
     st.markdown("<h1 style='font-weight: bold; margin-bottom: 0;'>ProcureIQ</h1>", unsafe_allow_html=True)
@@ -4241,7 +4246,7 @@ with col_nav:
             st.session_state.page = "Invoices"
             st.rerun()
 with col_logo:
-    st.image(logo_url, width=50)
+    st.image(logo_url, width=50)  # larger logo
 st.markdown("---")
 
 if "page" not in st.session_state:
