@@ -4019,14 +4019,14 @@ def render_invoices():
     st.subheader("Invoices")
     st.markdown("Search, track and manage all invoices in one place")
 
-    # Read query parameter for navigation from Dashboard
-    query_params = st.query_params
+    # Read query parameter for navigation from Dashboard (compatible with older Streamlit)
+    query_params = st.experimental_get_query_params()
     if "search_invoice" in query_params:
-        invoice_param = clean_invoice_number(query_params["search_invoice"])
+        invoice_param = clean_invoice_number(query_params["search_invoice"][0])
         if invoice_param:
             st.session_state.inv_search_q = invoice_param
             # Clear the parameter to avoid re-triggering on rerun
-            st.query_params.clear()
+            st.experimental_set_query_params()
 
     # Determine if we have a single invoice to show in detail
     search_term = st.session_state.get("inv_search_q", "")
