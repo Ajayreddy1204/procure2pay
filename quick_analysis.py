@@ -56,12 +56,12 @@ def run_quick_analysis(key: str) -> dict:
         cur_q_sql = f"""
             SELECT SUM(COALESCE(f.invoice_amount_local,0)) AS spend
             FROM {base}
-            WHERE f.posting_date BETWEEN '{sql_date(current_quarter_start)}' AND '{sql_date(today)}' {flt}
+            WHERE f.posting_date BETWEEN {sql_date(current_quarter_start)} AND {sql_date(today)} {flt}
         """
         prev_q_sql = f"""
             SELECT SUM(COALESCE(f.invoice_amount_local,0)) AS spend
             FROM {base}
-            WHERE f.posting_date BETWEEN '{sql_date(prev_quarter_start)}' AND '{sql_date(prev_quarter_end)}' {flt}
+            WHERE f.posting_date BETWEEN {sql_date(prev_quarter_start)} AND {sql_date(prev_quarter_end)} {flt}
         """
         cur_q = safe_number(run_query(cur_q_sql).loc[0,"spend"]) if not run_query(cur_q_sql).empty else 0
         prev_q = safe_number(run_query(prev_q_sql).loc[0,"spend"]) if not run_query(prev_q_sql).empty else 0
