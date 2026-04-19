@@ -1,7 +1,8 @@
 # dashboard.py
 import streamlit as st
+import pandas as pd
 from datetime import date
-from config import compute_range_preset
+from config import compute_range_preset, DATABASE
 from athena_client import run_query
 from utils import (
     sql_date, prior_window, build_vendor_where, pct_delta, safe_number, safe_int,
@@ -17,8 +18,6 @@ def render_dashboard():
         st.session_state.na_tab = "Overdue"
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
-
-    from config import DATABASE
 
     # Filter bar: Date Range, Vendor, Preset buttons
     col_date, col_vendor, col_preset = st.columns([1.4, 1.4, 2.2])
