@@ -1,8 +1,8 @@
 # genie.py
 import streamlit as st
+import pandas as pd
 import json
 import re
-import pandas as pd
 import html
 import uuid
 from datetime import datetime
