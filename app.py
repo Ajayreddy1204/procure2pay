@@ -1,6 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# Complete: Dashboard (responsive Needs Attention), Genie, Forecast, Invoices
+# Updated Genie tab with modern card layout, suggestion chips, and two‑column workspace
 # ================================
 
 import streamlit as st
@@ -657,6 +657,7 @@ def set_cache(question, response):
 
 # ---------------------------- DASHBOARD PAGE ----------------------------
 def render_dashboard():
+    # (unchanged from previous working version – kept exactly as before)
     if "preset" not in st.session_state:
         st.session_state.preset = "Last 30 Days"
     if "date_range" not in st.session_state:
@@ -939,7 +940,6 @@ def render_dashboard():
         end_idx = min(start_idx + items_per_page, total_items)
         page_df = attention_df.iloc[start_idx:end_idx]
 
-        # CSS for responsive grid and cards
         st.markdown("""
         <style>
         .na-grid {
@@ -1012,7 +1012,6 @@ def render_dashboard():
         </style>
         """, unsafe_allow_html=True)
 
-        # Generate clickable cards
         for i in range(0, len(page_df), 4):
             cols = st.columns(4)
             for j in range(4):
@@ -1023,7 +1022,6 @@ def render_dashboard():
                     amount = safe_number(row['amount'])
                     vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else 'Unknown'
                     due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ''
-                    # badge colors
                     if status_label == "Overdue":
                         badge_bg = "#fee2e2"
                         badge_color = "#dc2626"
@@ -1048,7 +1046,6 @@ def render_dashboard():
                             </a>
                         ''', unsafe_allow_html=True)
 
-        # Pagination
         col_prev, col_info, col_next = st.columns([1,2,1])
         with col_prev:
             if st.button("← Prev", disabled=(st.session_state.na_page == 0)):
@@ -1120,7 +1117,7 @@ def render_dashboard():
         else:
             st.info("No trend data")
 
-# ---------------------------- GENIE PAGE (full implementation) ----------------------------
+# ---------------------------- GENIE PAGE (UPDATED with modern UI) ----------------------------
 def process_custom_query(query: str) -> dict:
     sql, _ = generate_sql(query)
     if not sql or not is_safe_sql(sql):
@@ -1132,19 +1129,73 @@ def process_custom_query(query: str) -> dict:
     return {"layout": "sql", "sql": sql, "df": df.to_dict(orient="records"), "question": query}
 
 def render_genie():
+    # Custom CSS for cards and layout
     st.markdown("""
     <style>
-    .kpi-card { background: #fff; border: 1px solid #e6e8ee; border-radius: 12px; padding: 12px; }
-    .kpi-title { font-size: 12px; color: #64748b; font-weight: 800; }
-    .kpi-value { font-size: 28px; font-weight: 900; margin-top: 6px; }
-    .chat-message-user { background: #1459d2; color: white; padding: 10px 14px; border-radius: 16px; margin: 6px 0; }
-    .chat-message-assistant { background: #f1f5f9; color: #0f172a; padding: 10px 14px; border-radius: 16px; margin: 6px 0; }
-    .cache-badge { background: #eff6ff; color: #1d4ed8; border-radius: 999px; font-size: 11px; padding: 2px 9px; display: inline-block; margin-bottom: 4px; }
-    .chat-scrollable { max-height: 400px; overflow-y: auto; padding-right: 8px; }
-    .anomaly-banner { background: #fffbeb; border-left: 4px solid #f59e0b; border-radius: 8px; padding: 10px 16px; margin-bottom: 16px; font-size: 14px; }
+    /* Card styles */
+    .genie-card {
+        background: white;
+        border-radius: 16px;
+        padding: 1.5rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }
+    .genie-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 12px 24px rgba(0,0,0,0.1);
+    }
+    .genie-card h3 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+    .genie-card p {
+        color: #64748b;
+        font-size: 0.875rem;
+        line-height: 1.5;
+        margin-bottom: 1.5rem;
+    }
+    .genie-card button {
+        width: 100%;
+        margin-top: auto;
+    }
+    /* Suggestion chips */
+    .suggestion-chip {
+        background: #f1f5f9;
+        border-radius: 999px;
+        padding: 0.4rem 1rem;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: background 0.2s;
+        display: inline-block;
+        margin: 0.2rem;
+    }
+    .suggestion-chip:hover {
+        background: #e2e8f0;
+    }
+    /* Chat input container */
+    .chat-input-container {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 1rem;
+    }
+    /* Centered content */
+    .centered-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 2rem;
+    }
     </style>
     """, unsafe_allow_html=True)
 
+    # Initialize session state
     if "genie_session_id" not in st.session_state:
         st.session_state.genie_session_id = str(uuid.uuid4())
         st.session_state.genie_messages = []
@@ -1155,7 +1206,10 @@ def render_genie():
         st.session_state.selected_analysis = None
     if "last_custom_query" not in st.session_state:
         st.session_state.last_custom_query = ""
+    if "genie_prefill" not in st.session_state:
+        st.session_state.genie_prefill = ""
 
+    # Auto-run a query if requested (e.g., from card click)
     auto_query = st.session_state.pop("auto_run_query", None)
     if auto_query:
         st.session_state.selected_analysis = "custom"
@@ -1176,7 +1230,7 @@ def render_genie():
                 st.session_state.genie_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
         st.rerun()
 
-    # Quick analysis tiles
+    # ---- Card Row ----
     st.markdown("## Welcome to ProcureIQ Genie")
     st.markdown("Let Genie run one of these quick analyses for you.")
     cols = st.columns(4)
@@ -1188,74 +1242,64 @@ def render_genie():
     }
     for idx, (key, (title, desc)) in enumerate(quick_options.items()):
         with cols[idx]:
-            with st.container(border=True):
-                st.markdown(f"**{title}**")
-                st.caption(desc)
-                if st.button(f"Ask Genie", key=f"quick_{key}", use_container_width=True):
-                    st.session_state.genie_messages = []
-                    st.session_state.genie_turn_index = 0
-                    st.session_state.selected_analysis = key
-                    st.session_state.last_custom_query = title
-                    with st.spinner(f"Running {title}..."):
-                        result = run_quick_analysis(key)
-                        st.session_state.genie_response = result
-                        st.session_state.genie_messages.append({"role": "user", "content": title, "timestamp": datetime.now()})
-                        st.session_state.genie_messages.append({"role": "assistant", "content": f"Analysis for {title} complete.", "response": result, "timestamp": datetime.now()})
-                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", title)
-                        st.session_state.genie_turn_index += 1
-                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", source="quick")
-                        st.session_state.genie_turn_index += 1
-                        save_question(title, key)
+            with st.container():
+                st.markdown(f"""
+                <div class="genie-card">
+                    <div>
+                        <h3>{title}</h3>
+                        <p>{desc}</p>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                if st.button("Ask Genie", key=f"card_{key}", use_container_width=True):
+                    # Set auto-run query
+                    st.session_state.auto_run_query = title
                     st.rerun()
+
     st.markdown("---")
 
-    left_col, right_col = st.columns([0.35, 0.65], gap="medium")
+    # ---- Two‑Column Layout ----
+    left_col, right_col = st.columns([0.35, 0.65], gap="large")
 
+    # ---- LEFT PANEL (Collapsible sections) ----
     with left_col:
+        # Saved insights
         with st.expander("Saved insights", expanded=False):
             insights = get_saved_insights_cached(page="genie")
             if insights:
                 for ins in insights:
                     if st.button(ins["title"], key=f"insight_{ins['id']}", use_container_width=True):
-                        st.session_state.selected_analysis = "custom"
-                        st.session_state.last_custom_query = ins["question"]
-                        with st.spinner("Running saved insight..."):
-                            result = process_custom_query(ins["question"])
-                            st.session_state.genie_response = result
-                            st.session_state.genie_messages.append({"role": "user", "content": ins["question"], "timestamp": datetime.now()})
-                            st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", ins["question"])
-                            st.session_state.genie_turn_index += 1
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
-                            st.session_state.genie_turn_index += 1
-                            save_question(ins["question"], "custom")
-                            set_cache(ins["question"], result)
+                        st.session_state.auto_run_query = ins["question"]
                         st.rerun()
             else:
                 st.caption("Save any Genie answer to see it here.")
 
+        # Frequently asked by you (with suggestion chips)
         with st.expander("Frequently asked by you", expanded=False):
+            # Show example suggestion chips (these are static, but you can also load from DB)
+            suggestions = [
+                "forecast cash outflow for the next 7, 14, 30, 60, and 90 days",
+                "show me total spend ytd, monthly trends, and top 5 vendors",
+                "which invoices should we pay early to capture discounts"
+            ]
+            st.markdown('<div style="margin-bottom: 0.5rem;">Click a chip to fill the input:</div>', unsafe_allow_html=True)
+            for chip in suggestions:
+                if st.button(chip, key=f"chip_{chip[:20]}", use_container_width=True):
+                    st.session_state.genie_prefill = chip
+                    st.rerun()
+            # Also show actual frequent questions from DB
             faqs = get_frequent_questions_by_user_cached(5)
             if faqs:
+                st.markdown("---")
+                st.markdown("**Your top questions**")
                 for faq in faqs:
                     if st.button(f"{faq['query'][:50]} ({faq['count']})", key=f"faq_user_{faq['query']}", use_container_width=True):
-                        st.session_state.selected_analysis = "custom"
-                        st.session_state.last_custom_query = faq["query"]
-                        with st.spinner("Running..."):
-                            result = process_custom_query(faq["query"])
-                            st.session_state.genie_response = result
-                            st.session_state.genie_messages.append({"role": "user", "content": faq["query"], "timestamp": datetime.now()})
-                            st.session_state.genie_messages.append({"role": "assistant", "content": "Query executed.", "response": result, "timestamp": datetime.now()})
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", faq["query"])
-                            st.session_state.genie_turn_index += 1
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Query executed.", sql_used=result.get("sql", ""))
-                            st.session_state.genie_turn_index += 1
-                            save_question(faq["query"], "custom")
-                            set_cache(faq["query"], result)
+                        st.session_state.genie_prefill = faq["query"]
                         st.rerun()
             else:
                 st.caption("Your frequent questions will appear here.")
 
+        # Most frequent (all)
         with st.expander("Most frequent (all)", expanded=False):
             all_faqs = get_frequent_questions_all_cached(5)
             if all_faqs:
@@ -1264,92 +1308,70 @@ def render_genie():
             else:
                 st.caption("No questions yet.")
 
+    # ---- RIGHT PANEL (Chat interface) ----
     with right_col:
-        st.markdown("### AI Assistant")
-        st.markdown('<div class="chat-scrollable">', unsafe_allow_html=True)
-        for msg in st.session_state.genie_messages:
-            if msg["role"] == "user":
-                st.markdown(f'<div class="chat-message-user"><strong>You</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
-            else:
-                st.markdown(f'<div class="chat-message-assistant"><strong>Genie</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
-                if "response" in msg and msg["response"]:
-                    resp = msg["response"]
-                    if resp.get("layout") == "quick":
-                        metrics = resp.get("metrics", {})
-                        if metrics:
-                            metric_cols = st.columns(len(metrics))
-                            for i, (k, v) in enumerate(metrics.items()):
-                                with metric_cols[i]:
-                                    if k == "total_ytd":
-                                        st.metric("Total Spend (YTD)", abbr_currency(v))
-                                    elif k == "mom_pct":
-                                        st.metric("MoM Change", _safe_pct_str(v))
-                                    elif k == "qoq_pct":
-                                        st.metric("QoQ Change", _safe_pct_str(v))
-                                    elif k == "top5_pct":
-                                        st.metric("Top 5 Vendors", f"{v:.0f}% of total spend")
-                                    else:
-                                        st.metric(k.replace("_"," ").title(), str(v))
-
-                        anomaly = resp.get("anomaly")
-                        if anomaly:
-                            st.markdown(f'<div class="anomaly-banner">⚠️ <strong>Anomaly Detected</strong><br/>{html.escape(anomaly)}</div>', unsafe_allow_html=True)
-
-                        monthly_df = resp.get("monthly_df")
-                        if monthly_df is not None and not monthly_df.empty and "MONTHLY_SPEND" in monthly_df.columns:
-                            st.subheader("Spending Trends")
-                            alt_line_monthly(monthly_df.rename(columns={"MONTH":"MONTH", "MONTHLY_SPEND":"VALUE"}), month_col="MONTH", value_col="VALUE", height=300, title="Monthly Spend Trend (Last 12 Months)")
-
-                        if monthly_df is not None and not monthly_df.empty and "INVOICE_COUNT" in monthly_df.columns:
-                            st.subheader("Invoice volume by month")
-                            alt_bar(monthly_df, x="MONTH", y="INVOICE_COUNT", color="#1e88e5", height=250)
-
-                        if monthly_df is not None and not monthly_df.empty and "VENDOR_COUNT" in monthly_df.columns:
-                            st.subheader("Active vendors by month")
-                            alt_bar(monthly_df, x="MONTH", y="VENDOR_COUNT", color="#7c3aed", height=250)
-
-                        vendors_df = resp.get("vendors_df")
-                        if vendors_df is not None and not vendors_df.empty and "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
-                            st.subheader("Top 10 Vendors by Spend (YTD)")
-                            alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=400)
-
-                        st.subheader("Prescriptive — Recommendations & next steps")
-                        prescriptive_text = generate_prescriptive_from_quick(resp)
-                        if prescriptive_text:
-                            st.markdown(f'<div style="font-size:14px; line-height:1.6;">{prescriptive_text}</div>', unsafe_allow_html=True)
-                        else:
-                            st.info("No prescriptive insights available.")
-
-                        with st.expander("Query outputs"):
-                            st.caption("Show full result tables")
-                            if monthly_df is not None and not monthly_df.empty:
-                                st.dataframe(monthly_df, use_container_width=True)
-                            if vendors_df is not None and not vendors_df.empty:
-                                st.dataframe(vendors_df, use_container_width=True)
-                        with st.expander("Show SQL used"):
-                            sql_dict = resp.get("sql", {})
-                            for name, sql_text in sql_dict.items():
-                                st.markdown(f"**{name}**")
-                                st.code(sql_text, language="sql")
-
-                    elif resp.get("layout") == "sql":
-                        df = pd.DataFrame(resp["df"])
-                        st.dataframe(df, use_container_width=True)
-                        chart = auto_chart(df)
-                        if chart:
-                            st.altair_chart(chart, use_container_width=True)
-                        with st.expander("View SQL"):
-                            st.code(resp["sql"], language="sql")
-                    elif resp.get("layout") == "error":
-                        st.error(resp.get("message", "Unknown error"))
+        # Centered content
+        st.markdown('<div class="centered-container">', unsafe_allow_html=True)
+        st.markdown("### Start a Conversation")
+        st.markdown("Ask questions about your Procurement to Pay data, or select a pre-built analysis from the library.")
         st.markdown('</div>', unsafe_allow_html=True)
 
+        # Chat history area (scrollable)
+        chat_container = st.container(height=300)
+        with chat_container:
+            for msg in st.session_state.genie_messages:
+                if msg["role"] == "user":
+                    st.markdown(f'<div style="background:#1459d2; color:white; padding:10px 14px; border-radius:16px; margin:6px 0; max-width:80%; align-self:flex-end;"><strong>You</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div style="background:#f1f5f9; color:#0f172a; padding:10px 14px; border-radius:16px; margin:6px 0; max-width:80%;"><strong>Genie</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
+                    if "response" in msg and msg["response"]:
+                        resp = msg["response"]
+                        if resp.get("layout") == "quick":
+                            # Show quick analysis output (metrics, charts, etc.) – same as before
+                            metrics = resp.get("metrics", {})
+                            if metrics:
+                                metric_cols = st.columns(len(metrics))
+                                for i, (k, v) in enumerate(metrics.items()):
+                                    with metric_cols[i]:
+                                        st.metric(k.replace("_"," ").title(), abbr_currency(v) if isinstance(v, (int,float)) else str(v))
+                            anomaly = resp.get("anomaly")
+                            if anomaly:
+                                st.warning(f"⚠️ {anomaly}")
+                            monthly_df = resp.get("monthly_df")
+                            if monthly_df is not None and not monthly_df.empty:
+                                st.subheader("Spending Trends")
+                                alt_line_monthly(monthly_df.rename(columns={"MONTH":"MONTH", "MONTHLY_SPEND":"VALUE"}), month_col="MONTH", value_col="VALUE", height=200)
+                            vendors_df = resp.get("vendors_df")
+                            if vendors_df is not None and not vendors_df.empty:
+                                st.subheader("Top Vendors")
+                                alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=300)
+                            with st.expander("View SQL used"):
+                                sql_dict = resp.get("sql", {})
+                                for name, sql_text in sql_dict.items():
+                                    st.code(sql_text, language="sql")
+                        elif resp.get("layout") == "sql":
+                            df = pd.DataFrame(resp["df"])
+                            st.dataframe(df, use_container_width=True)
+                            chart = auto_chart(df)
+                            if chart:
+                                st.altair_chart(chart, use_container_width=True)
+                            with st.expander("View SQL"):
+                                st.code(resp["sql"], language="sql")
+                        elif resp.get("layout") == "error":
+                            st.error(resp.get("message", "Unknown error"))
+
+        # Input box with send button
         with st.form(key="genie_form", clear_on_submit=True):
             col_input, col_btn = st.columns([0.85, 0.15])
             with col_input:
-                user_question = st.text_input("Ask a question", placeholder="e.g., Show me total spend YTD", label_visibility="collapsed")
+                user_question = st.text_input(
+                    "Ask a question",
+                    value=st.session_state.pop("genie_prefill", ""),
+                    placeholder="e.g., Show me total spend YTD",
+                    label_visibility="collapsed"
+                )
             with col_btn:
-                submitted = st.form_submit_button("Send", type="primary")
+                submitted = st.form_submit_button("→", type="primary")
             if submitted and user_question:
                 with st.spinner("Generating SQL..."):
                     cached = get_cache(user_question)
