@@ -151,7 +151,11 @@ def render_genie():
                 st.session_state.genie_messages.append({"role": "assistant", "content": "Analysis complete.", "response": result, "timestamp": datetime.now()})
                 save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", auto_query)
                 st.session_state.genie_turn_index += 1
-                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", sql_used=result.get("sql", ""))
+                # Convert sql_used to JSON string if it's a dict
+                sql_used_val = result.get("sql", "")
+                if isinstance(sql_used_val, dict):
+                    sql_used_val = json.dumps(sql_used_val)
+                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", sql_used=sql_used_val)
                 st.session_state.genie_turn_index += 1
                 save_question(auto_query, "quick" if auto_query in quick_map else "custom")
                 set_cache(auto_query, result)
@@ -309,7 +313,11 @@ def render_genie():
                         st.session_state.genie_messages.append({"role": "assistant", "content": "Answer from cache.", "response": cached, "timestamp": datetime.now()})
                         save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
                         st.session_state.genie_turn_index += 1
-                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Answer from cache.", source="cache")
+                        # Convert sql_used to JSON string if needed
+                        sql_used_val = cached.get("sql", "") if isinstance(cached, dict) else ""
+                        if isinstance(sql_used_val, dict):
+                            sql_used_val = json.dumps(sql_used_val)
+                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Answer from cache.", source="cache", sql_used=sql_used_val)
                         st.session_state.genie_turn_index += 1
                         save_question(user_question, "custom")
                     else:
@@ -325,7 +333,10 @@ def render_genie():
                             st.session_state.genie_messages.append({"role": "assistant", "content": "Analysis complete.", "response": result, "timestamp": datetime.now()})
                             save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
                             st.session_state.genie_turn_index += 1
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", sql_used=result.get("sql", ""))
+                            sql_used_val = result.get("sql", "")
+                            if isinstance(sql_used_val, dict):
+                                sql_used_val = json.dumps(sql_used_val)
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", sql_used=sql_used_val)
                             st.session_state.genie_turn_index += 1
                             save_question(user_question, "quick" if user_question in quick_map else "custom")
                         else:
