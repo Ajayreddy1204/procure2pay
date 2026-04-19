@@ -11,6 +11,7 @@ from bedrock_client import ask_bedrock
 from utils import abbr_currency, auto_chart, alt_line_monthly, alt_bar, ensure_limit, is_safe_sql
 from semantic_model import SYSTEM_PROMPT, DESCRIPTIVE_PROMPT_TEMPLATE, generate_sql
 from persistence import get_saved_insights_cached, get_frequent_questions_by_user_cached, get_frequent_questions_all_cached, save_chat_message, save_question, set_cache, get_cache
+from quick_analysis import run_quick_analysis
 
 def process_custom_query(query: str) -> dict:
     sql, _ = generate_sql(query)
@@ -124,23 +125,35 @@ def render_genie():
     if "genie_prefill" not in st.session_state:
         st.session_state.genie_prefill = ""
 
+    # Map quick analysis titles to keys
+    quick_map = {
+        "Spending Overview": "spending_overview",
+        "Vendor Analysis": "vendor_analysis",
+        "Payment Performance": "payment_performance",
+        "Invoice Aging": "invoice_aging"
+    }
+
     auto_query = st.session_state.pop("auto_run_query", None)
     if auto_query:
         st.session_state.genie_messages = []
         st.session_state.genie_turn_index = 0
         st.session_state.selected_analysis = "custom"
         st.session_state.last_custom_query = auto_query
-        with st.spinner("Running query and generating insights..."):
-            result = process_custom_query(auto_query)
+        with st.spinner("Running analysis..."):
+            # Check if it's a quick analysis
+            if auto_query in quick_map:
+                result = run_quick_analysis(quick_map[auto_query])
+            else:
+                result = process_custom_query(auto_query)
             st.session_state.genie_response = result
             st.session_state.genie_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
-            if result.get("layout") == "analyst":
-                st.session_state.genie_messages.append({"role": "assistant", "content": "Insights generated.", "response": result, "timestamp": datetime.now()})
+            if result.get("layout") in ("quick", "analyst", "sql"):
+                st.session_state.genie_messages.append({"role": "assistant", "content": "Analysis complete.", "response": result, "timestamp": datetime.now()})
                 save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", auto_query)
                 st.session_state.genie_turn_index += 1
-                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Insights generated.", sql_used=result.get("sql", ""))
+                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", sql_used=result.get("sql", ""))
                 st.session_state.genie_turn_index += 1
-                save_question(auto_query, "custom")
+                save_question(auto_query, "quick" if auto_query in quick_map else "custom")
                 set_cache(auto_query, result)
             else:
                 st.session_state.genie_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
@@ -300,17 +313,21 @@ def render_genie():
                         st.session_state.genie_turn_index += 1
                         save_question(user_question, "custom")
                     else:
-                        result = process_custom_query(user_question)
-                        if result.get("layout") in ("analyst", "sql"):
+                        # Check if it matches a quick analysis title
+                        if user_question in quick_map:
+                            result = run_quick_analysis(quick_map[user_question])
+                        else:
+                            result = process_custom_query(user_question)
+                        if result.get("layout") in ("quick", "analyst", "sql"):
                             set_cache(user_question, result)
                             st.session_state.genie_response = result
                             st.session_state.genie_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
-                            st.session_state.genie_messages.append({"role": "assistant", "content": "Insights generated.", "response": result, "timestamp": datetime.now()})
+                            st.session_state.genie_messages.append({"role": "assistant", "content": "Analysis complete.", "response": result, "timestamp": datetime.now()})
                             save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
                             st.session_state.genie_turn_index += 1
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Insights generated.", sql_used=result.get("sql", ""))
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", sql_used=result.get("sql", ""))
                             st.session_state.genie_turn_index += 1
-                            save_question(user_question, "custom")
+                            save_question(user_question, "quick" if user_question in quick_map else "custom")
                         else:
                             st.error(result.get("message", "Query failed"))
                 st.rerun()
