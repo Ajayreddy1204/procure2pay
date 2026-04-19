@@ -1,6 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# Updated Genie tab with modern card layout, suggestion chips, and two‑column workspace
+# Fixed: st.container(height) replaced with scrollable div
 # ================================
 
 import streamlit as st
@@ -657,7 +657,6 @@ def set_cache(question, response):
 
 # ---------------------------- DASHBOARD PAGE ----------------------------
 def render_dashboard():
-    # (unchanged from previous working version – kept exactly as before)
     if "preset" not in st.session_state:
         st.session_state.preset = "Last 30 Days"
     if "date_range" not in st.session_state:
@@ -1117,7 +1116,7 @@ def render_dashboard():
         else:
             st.info("No trend data")
 
-# ---------------------------- GENIE PAGE (UPDATED with modern UI) ----------------------------
+# ---------------------------- GENIE PAGE (UPDATED with modern UI, fixed container height) ----------------------------
 def process_custom_query(query: str) -> dict:
     sql, _ = generate_sql(query)
     if not sql or not is_safe_sql(sql):
@@ -1177,13 +1176,31 @@ def render_genie():
     .suggestion-chip:hover {
         background: #e2e8f0;
     }
-    /* Chat input container */
-    .chat-input-container {
-        display: flex;
-        gap: 0.5rem;
-        margin-top: 1rem;
+    /* Chat container - scrollable div */
+    .chat-scrollable {
+        max-height: 400px;
+        overflow-y: auto;
+        padding-right: 8px;
+        margin-bottom: 1rem;
     }
-    /* Centered content */
+    /* Chat message styles */
+    .chat-message-user {
+        background: #1459d2;
+        color: white;
+        padding: 10px 14px;
+        border-radius: 16px;
+        margin: 6px 0;
+        max-width: 80%;
+        align-self: flex-end;
+    }
+    .chat-message-assistant {
+        background: #f1f5f9;
+        color: #0f172a;
+        padding: 10px 14px;
+        border-radius: 16px;
+        margin: 6px 0;
+        max-width: 80%;
+    }
     .centered-container {
         display: flex;
         flex-direction: column;
@@ -1252,7 +1269,6 @@ def render_genie():
                 </div>
                 """, unsafe_allow_html=True)
                 if st.button("Ask Genie", key=f"card_{key}", use_container_width=True):
-                    # Set auto-run query
                     st.session_state.auto_run_query = title
                     st.rerun()
 
@@ -1276,7 +1292,6 @@ def render_genie():
 
         # Frequently asked by you (with suggestion chips)
         with st.expander("Frequently asked by you", expanded=False):
-            # Show example suggestion chips (these are static, but you can also load from DB)
             suggestions = [
                 "forecast cash outflow for the next 7, 14, 30, 60, and 90 days",
                 "show me total spend ytd, monthly trends, and top 5 vendors",
@@ -1287,7 +1302,6 @@ def render_genie():
                 if st.button(chip, key=f"chip_{chip[:20]}", use_container_width=True):
                     st.session_state.genie_prefill = chip
                     st.rerun()
-            # Also show actual frequent questions from DB
             faqs = get_frequent_questions_by_user_cached(5)
             if faqs:
                 st.markdown("---")
@@ -1316,49 +1330,49 @@ def render_genie():
         st.markdown("Ask questions about your Procurement to Pay data, or select a pre-built analysis from the library.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Chat history area (scrollable)
-        chat_container = st.container(height=300)
-        with chat_container:
-            for msg in st.session_state.genie_messages:
-                if msg["role"] == "user":
-                    st.markdown(f'<div style="background:#1459d2; color:white; padding:10px 14px; border-radius:16px; margin:6px 0; max-width:80%; align-self:flex-end;"><strong>You</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<div style="background:#f1f5f9; color:#0f172a; padding:10px 14px; border-radius:16px; margin:6px 0; max-width:80%;"><strong>Genie</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
-                    if "response" in msg and msg["response"]:
-                        resp = msg["response"]
-                        if resp.get("layout") == "quick":
-                            # Show quick analysis output (metrics, charts, etc.) – same as before
-                            metrics = resp.get("metrics", {})
-                            if metrics:
-                                metric_cols = st.columns(len(metrics))
-                                for i, (k, v) in enumerate(metrics.items()):
-                                    with metric_cols[i]:
-                                        st.metric(k.replace("_"," ").title(), abbr_currency(v) if isinstance(v, (int,float)) else str(v))
-                            anomaly = resp.get("anomaly")
-                            if anomaly:
-                                st.warning(f"⚠️ {anomaly}")
-                            monthly_df = resp.get("monthly_df")
-                            if monthly_df is not None and not monthly_df.empty:
-                                st.subheader("Spending Trends")
-                                alt_line_monthly(monthly_df.rename(columns={"MONTH":"MONTH", "MONTHLY_SPEND":"VALUE"}), month_col="MONTH", value_col="VALUE", height=200)
-                            vendors_df = resp.get("vendors_df")
-                            if vendors_df is not None and not vendors_df.empty:
-                                st.subheader("Top Vendors")
-                                alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=300)
-                            with st.expander("View SQL used"):
-                                sql_dict = resp.get("sql", {})
-                                for name, sql_text in sql_dict.items():
-                                    st.code(sql_text, language="sql")
-                        elif resp.get("layout") == "sql":
-                            df = pd.DataFrame(resp["df"])
-                            st.dataframe(df, use_container_width=True)
-                            chart = auto_chart(df)
-                            if chart:
-                                st.altair_chart(chart, use_container_width=True)
-                            with st.expander("View SQL"):
-                                st.code(resp["sql"], language="sql")
-                        elif resp.get("layout") == "error":
-                            st.error(resp.get("message", "Unknown error"))
+        # Scrollable chat area (using a div with fixed height)
+        st.markdown('<div class="chat-scrollable">', unsafe_allow_html=True)
+        for msg in st.session_state.genie_messages:
+            if msg["role"] == "user":
+                st.markdown(f'<div class="chat-message-user"><strong>You</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="chat-message-assistant"><strong>Genie</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
+                if "response" in msg and msg["response"]:
+                    resp = msg["response"]
+                    if resp.get("layout") == "quick":
+                        # Show quick analysis output (metrics, charts, etc.)
+                        metrics = resp.get("metrics", {})
+                        if metrics:
+                            metric_cols = st.columns(len(metrics))
+                            for i, (k, v) in enumerate(metrics.items()):
+                                with metric_cols[i]:
+                                    st.metric(k.replace("_"," ").title(), abbr_currency(v) if isinstance(v, (int,float)) else str(v))
+                        anomaly = resp.get("anomaly")
+                        if anomaly:
+                            st.warning(f"⚠️ {anomaly}")
+                        monthly_df = resp.get("monthly_df")
+                        if monthly_df is not None and not monthly_df.empty:
+                            st.subheader("Spending Trends")
+                            alt_line_monthly(monthly_df.rename(columns={"MONTH":"MONTH", "MONTHLY_SPEND":"VALUE"}), month_col="MONTH", value_col="VALUE", height=200)
+                        vendors_df = resp.get("vendors_df")
+                        if vendors_df is not None and not vendors_df.empty:
+                            st.subheader("Top Vendors")
+                            alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=300)
+                        with st.expander("View SQL used"):
+                            sql_dict = resp.get("sql", {})
+                            for name, sql_text in sql_dict.items():
+                                st.code(sql_text, language="sql")
+                    elif resp.get("layout") == "sql":
+                        df = pd.DataFrame(resp["df"])
+                        st.dataframe(df, use_container_width=True)
+                        chart = auto_chart(df)
+                        if chart:
+                            st.altair_chart(chart, use_container_width=True)
+                        with st.expander("View SQL"):
+                            st.code(resp["sql"], language="sql")
+                    elif resp.get("layout") == "error":
+                        st.error(resp.get("message", "Unknown error"))
+        st.markdown('</div>', unsafe_allow_html=True)
 
         # Input box with send button
         with st.form(key="genie_form", clear_on_submit=True):
