@@ -5,6 +5,7 @@ import altair as alt
 from decimal import Decimal
 from datetime import date, datetime
 from typing import Union
+import streamlit as st
 
 def safe_number(val, default=0.0):
     try:
@@ -74,7 +75,6 @@ def make_json_serializable(obj):
     return obj
 
 def kpi_tile(title: str, value: str, delta_text: str = None, is_positive: bool = True):
-    import streamlit as st
     if delta_text and delta_text != "0%":
         if "↑" in delta_text:
             color = "#118d57"
@@ -94,8 +94,6 @@ def kpi_tile(title: str, value: str, delta_text: str = None, is_positive: bool =
     """, unsafe_allow_html=True)
 
 def alt_bar(df, x, y, title=None, horizontal=False, color="#1459d2", height=320):
-    import streamlit as st
-    import altair as alt
     if df.empty:
         st.info("No data for this chart.")
         return
@@ -117,8 +115,6 @@ def alt_bar(df, x, y, title=None, horizontal=False, color="#1459d2", height=320)
     st.altair_chart(chart, use_container_width=True)
 
 def alt_line_monthly(df, month_col='month', value_col='value', height=140, title=None):
-    import streamlit as st
-    import altair as alt
     if df.empty:
         st.info("No data for this chart.")
         return
@@ -139,8 +135,6 @@ def alt_line_monthly(df, month_col='month', value_col='value', height=140, title
     st.altair_chart(chart, use_container_width=True)
 
 def alt_donut_status(df, label_col="status", value_col="cnt", title=None, height=340):
-    import streamlit as st
-    import altair as alt
     if df.empty or df[value_col].sum() == 0:
         st.info("No data for donut chart.")
         return
@@ -162,3 +156,53 @@ def alt_donut_status(df, label_col="status", value_col="cnt", title=None, height
     if title:
         chart = chart.properties(title=title)
     st.altair_chart(chart, use_container_width=True)
+
+def build_vendor_where(selected_vendor: str) -> str:
+    if selected_vendor == "All Vendors":
+        return ""
+    safe_vendor = selected_vendor.replace("'", "''")
+    return f"AND UPPER(v.vendor_name) = UPPER('{safe_vendor}')"
+
+def is_safe_sql(sql: str) -> bool:
+    sql_lower = sql.lower().strip()
+    if not sql_lower.startswith("select"):
+        return False
+    dangerous = ["insert", "update", "delete", "drop", "alter", "create", "truncate", "grant", "revoke"]
+    for word in dangerous:
+        if re.search(r'\b' + word + r'\b', sql_lower):
+            return False
+    return True
+
+def ensure_limit(sql: str, default_limit: int = 100) -> str:
+    sql_lower = sql.lower()
+    if "limit" in sql_lower:
+        return sql
+    if re.search(r'\b(count|sum|avg|min|max)\b', sql_lower) and "group by" not in sql_lower:
+        return sql
+    return f"{sql.rstrip(';')} LIMIT {default_limit}"
+
+def auto_chart(df: pd.DataFrame) -> Union[alt.Chart, None]:
+    if df.empty or len(df) > 200:
+        return None
+    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+    if not numeric_cols:
+        return None
+    dim_candidates = [c for c in df.columns if c not in numeric_cols]
+    if dim_candidates:
+        dim = dim_candidates[0]
+        if len(numeric_cols) == 1:
+            chart = alt.Chart(df).mark_bar().encode(
+                x=alt.X(dim, sort=None),
+                y=alt.Y(numeric_cols[0]),
+                tooltip=[dim, numeric_cols[0]]
+            )
+        else:
+            melted = df.melt(id_vars=[dim], value_vars=numeric_cols)
+            chart = alt.Chart(melted).mark_line(point=True).encode(
+                x=alt.X(dim, sort=None),
+                y=alt.Y('value', title='Value'),
+                color='variable',
+                tooltip=[dim, 'variable', 'value']
+            )
+        return chart.interactive()
+    return None
