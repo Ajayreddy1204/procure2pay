@@ -1,4 +1,5 @@
 # persistence.py
+import streamlit as st
 import sqlite3
 import hashlib
 import json
@@ -87,7 +88,6 @@ def set_cache(question, response):
     conn.commit()
     conn.close()
 
-# Caching helper functions for frequently asked questions (simplified)
 @st.cache_data(ttl=300)
 def get_saved_insights_cached(page="genie", limit=20):
     user = get_current_user()
