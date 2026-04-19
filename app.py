@@ -7,7 +7,6 @@ from genie import render_genie
 from forecast import render_forecast
 from invoices import render_invoices
 
-# Initialize database
 init_db()
 
 st.markdown("""
@@ -41,7 +40,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Header with logo top right, title left, navigation center
 col_title, col_nav, col_logo = st.columns([1, 3, 1])
 with col_title:
     st.markdown("<h1 style='font-weight: bold; margin-bottom: 0;'>ProcureIQ</h1>", unsafe_allow_html=True)
@@ -66,7 +64,7 @@ with col_nav:
             st.session_state.page = "Invoices"
             st.rerun()
 with col_logo:
-    st.image(LOGO_URL, width=80)  # larger logo
+    st.image(LOGO_URL, width=80)
 st.markdown("---")
 
 if "page" not in st.session_state:
