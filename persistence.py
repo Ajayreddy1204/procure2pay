@@ -53,8 +53,6 @@ def save_question(query, analysis_type):
               (norm, query, user, analysis_type, datetime.now()))
     conn.commit()
     conn.close()
-    # Invalidate caches if needed
-    # get_frequent_questions_by_user_cached.clear() etc. will be handled in the calling code
 
 def save_insight(question, title, analysis_type="custom", page="genie"):
     insight_id = str(uuid.uuid4())
@@ -88,3 +86,36 @@ def set_cache(question, response):
               (q_hash, question, json.dumps(serializable_response), datetime.now(), datetime.now(), q_hash))
     conn.commit()
     conn.close()
+
+# Caching helper functions for frequently asked questions (simplified)
+@st.cache_data(ttl=300)
+def get_saved_insights_cached(page="genie", limit=20):
+    user = get_current_user()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''SELECT insight_id, title, question, verified_query_name, created_at FROM saved_insights
+                 WHERE page = ? AND created_by = ? ORDER BY created_at DESC LIMIT ?''', (page, user, limit))
+    rows = c.fetchall()
+    conn.close()
+    return [{"id": row[0], "title": row[1], "question": row[2], "type": row[3], "created_at": row[4]} for row in rows]
+
+@st.cache_data(ttl=300)
+def get_frequent_questions_by_user_cached(limit=10):
+    user = get_current_user()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''SELECT normalized_query, COUNT(*) as cnt FROM question_history
+                 WHERE user_name = ? GROUP BY normalized_query ORDER BY cnt DESC LIMIT ?''', (user, limit))
+    rows = c.fetchall()
+    conn.close()
+    return [{"query": row[0], "count": row[1]} for row in rows]
+
+@st.cache_data(ttl=300)
+def get_frequent_questions_all_cached(limit=10):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''SELECT normalized_query, COUNT(*) as cnt FROM question_history
+                 GROUP BY normalized_query ORDER BY cnt DESC LIMIT ?''', (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return [{"query": row[0], "count": row[1]} for row in rows]
