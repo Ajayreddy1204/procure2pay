@@ -1,11 +1,11 @@
 # utils.py
-import re
+import streamlit as st
 import pandas as pd
 import altair as alt
+from datetime import date, datetime, timedelta
 from decimal import Decimal
-from datetime import date, datetime
+import re
 from typing import Union
-import streamlit as st
 
 def safe_number(val, default=0.0):
     try:
