@@ -1,6 +1,6 @@
 # ================================
 # P2P Analytics + Genie (Athena + Bedrock Nova)
-# Forecast tab: exact KPI card colors, two sub‑tabs, clean table
+# Fixed: DATE_PARSE for GR/IR trend chart, all other features intact
 # ================================
 
 import streamlit as st
@@ -1116,7 +1116,7 @@ def render_dashboard():
         else:
             st.info("No trend data")
 
-# ---------------------------- GENIE PAGE (UPDATED with modern UI, fixed container height) ----------------------------
+# ---------------------------- GENIE PAGE ----------------------------
 def process_custom_query(query: str) -> dict:
     sql, _ = generate_sql(query)
     if not sql or not is_safe_sql(sql):
@@ -1423,9 +1423,9 @@ def generate_prescriptive_from_quick(resp: dict) -> str:
         return "No specific prescriptive insights available based on the data."
     return "<br/>".join(insights[:6])
 
-# ---------------------------- FORECAST PAGE (Redesigned exactly per spec) ----------------------------
+# ---------------------------- FORECAST PAGE (with fixed date conversion) ----------------------------
 def render_forecast():
-    # Get cash flow data (same as before)
+    # Get cash flow data
     cf_sql = f"""
         SELECT
             forecast_bucket,
@@ -1447,7 +1447,6 @@ def render_forecast():
     """
     cf_df = run_query(cf_sql)
 
-    # Fallback if view missing
     if cf_df.empty:
         st.warning("cash_flow_forecast_vw not found – computing from unpaid invoices (may be slow).")
         cf_sql_fallback = f"""
@@ -1502,11 +1501,9 @@ def render_forecast():
         """
         cf_df = run_query(cf_sql_fallback)
 
-    # Create two tabs: Cash Flow Need Forecast (active) and GR/IR Reconciliation
     tab1, tab2 = st.tabs(["Cash Flow Need Forecast", "GR/IR Reconciliation"])
 
     with tab1:
-        # ---- 4 KPI cards with exact colors ----
         if not cf_df.empty:
             total_unpaid = cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "TOTAL_UNPAID"].empty else 0
             overdue_now = cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"]["total_amount"].values[0] if not cf_df[cf_df["forecast_bucket"] == "OVERDUE_NOW"].empty else 0
@@ -1516,12 +1513,10 @@ def render_forecast():
             total_unpaid = overdue_now = due_30 = 0
             pct_due_30 = 0
 
-        # Card background colors (light yellow, light red/pink, light blue, light teal/green)
         kpi_colors = ["#fff7e0", "#ffe6ef", "#e6f3ff", "#e0f7fa"]
         kpi_titles = ["TOTAL UNPAID", "OVERDUE NOW", "DUE NEXT 30 DAYS", "% DUE ≤ 30 DAYS"]
         kpi_values = [abbr_currency(total_unpaid), abbr_currency(overdue_now), abbr_currency(due_30), f"{pct_due_30:.1f}%"]
 
-        # Custom CSS for KPI cards to match exact design
         st.markdown("""
         <style>
         .forecast-kpi-card {
@@ -1558,18 +1553,14 @@ def render_forecast():
                 """, unsafe_allow_html=True)
 
         st.markdown("---")
-
-        # ---- Table Section ----
         st.markdown("#### Obligations by time bucket")
         if not cf_df.empty:
-            # Display table with all columns
             st.dataframe(cf_df, use_container_width=True, hide_index=True)
             csv = cf_df.to_csv(index=False).encode('utf-8')
             st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
         else:
             st.info("No cash flow forecast data available.")
 
-        # ---- Action Playbook (keep as is) ----
         st.markdown("---")
         st.markdown("### Action Playbook")
         st.markdown("Use these guided analyses to turn the forecast into decisions: who to pay now, who to pay early, and where we are at risk of paying late.")
@@ -1586,7 +1577,6 @@ def render_forecast():
                 st.rerun()
 
     with tab2:
-        # GR/IR Reconciliation content (exactly as before)
         st.markdown("#### GR/IR Reconciliation")
         grir_summary_sql = f"""
             WITH latest AS (
@@ -1631,9 +1621,10 @@ def render_forecast():
 
             st.caption(f"GR/IR position for {year:04d}-{month:02d}: {grir_items:,} items outstanding; {pct_over_60:.1f}% of balance and {cnt_over_60:,} items are older than 60 days.")
 
+            # Fixed date conversion using DATE_PARSE
             trend_sql = f"""
                 SELECT
-                    TO_DATE(CAST(year AS VARCHAR) || '-' || LPAD(CAST(month AS VARCHAR), 2, '0') || '-01') AS month_date,
+                    DATE_PARSE(CAST(year AS VARCHAR) || '-' || LPAD(CAST(month AS VARCHAR), 2, '0') || '-01', '%Y-%m-%d') AS month_date,
                     invoice_count,
                     total_grir_blnc
                 FROM {DATABASE}.gr_ir_outstanding_balance_vw
