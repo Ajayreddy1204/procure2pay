@@ -257,7 +257,7 @@ def render_genie():
                         monthly_df = resp.get("monthly_df")
                         if monthly_df is not None and not monthly_df.empty:
                             st.subheader("Spending Trends")
-                            # ----- FIX: dynamic column detection -----
+                            # Dynamic column detection for monthly data
                             month_candidates = ['MONTH', 'month', 'Month', 'month_str', 'MONTH_STR']
                             value_candidates = ['MONTHLY_SPEND', 'monthly_spend', 'VALUE', 'value', 'AVG_DAYS', 'SPEND']
                             month_col = None
@@ -278,7 +278,13 @@ def render_genie():
                         vendors_df = resp.get("vendors_df")
                         if vendors_df is not None and not vendors_df.empty:
                             st.subheader("Top Vendors")
-                            alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=300)
+                            # Rename columns to uppercase for consistency with alt_bar expectations
+                            vendors_df.columns = [c.upper() for c in vendors_df.columns]
+                            # Ensure required columns exist
+                            if "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
+                                alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=300)
+                            else:
+                                st.dataframe(vendors_df, use_container_width=True)
                         with st.expander("View SQL used"):
                             sql_dict = resp.get("sql", {})
                             for name, sql_text in sql_dict.items():
