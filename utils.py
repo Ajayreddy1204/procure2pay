@@ -2,11 +2,15 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
+import numpy as np
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 import re
 from typing import Union
 
+# ------------------------------------------------------------
+# Safe number / int conversion
+# ------------------------------------------------------------
 def safe_number(val, default=0.0):
     try:
         if pd.isna(val):
@@ -23,6 +27,9 @@ def safe_int(val, default=0):
     except Exception:
         return default
 
+# ------------------------------------------------------------
+# Currency abbreviation (e.g., $1.5M)
+# ------------------------------------------------------------
 def abbr_currency(v: float, currency_symbol: str = "$") -> str:
     n = abs(v)
     sign = "-" if v < 0 else ""
@@ -34,6 +41,9 @@ def abbr_currency(v: float, currency_symbol: str = "$") -> str:
         return f"{sign}{currency_symbol}{n/1_000:.1f}K"
     return f"{sign}{currency_symbol}{n:.0f}"
 
+# ------------------------------------------------------------
+# Date helpers
+# ------------------------------------------------------------
 def sql_date(d: date) -> str:
     return f"DATE '{d.strftime('%Y-%m-%d')}'"
 
@@ -65,15 +75,38 @@ def prior_window(start: date, end: date):
     prev_start = prev_end - timedelta(days=days - 1)
     return prev_start, prev_end
 
+# ------------------------------------------------------------
+# JSON serialization (handles DataFrames, Decimal, numpy, dates)
+# ------------------------------------------------------------
 def make_json_serializable(obj):
-    if isinstance(obj, (datetime, date)):
+    """Recursively convert an object into a JSON‑serializable form."""
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    if isinstance(obj, (date, datetime)):
         return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, pd.Timestamp):
+        return obj.isoformat()
+    if isinstance(obj, pd.DataFrame):
+        # Convert DataFrame to dict of lists (JSON friendly)
+        return obj.to_dict(orient='list')
+    if isinstance(obj, pd.Series):
+        return obj.to_list()
     if isinstance(obj, dict):
         return {k: make_json_serializable(v) for k, v in obj.items()}
-    if isinstance(obj, list):
+    if isinstance(obj, (list, tuple)):
         return [make_json_serializable(i) for i in obj]
-    return obj
+    # Fallback: convert to string
+    return str(obj)
 
+# ------------------------------------------------------------
+# KPI tile (custom HTML)
+# ------------------------------------------------------------
 def kpi_tile(title: str, value: str, delta_text: str = None, is_positive: bool = True):
     if delta_text and delta_text != "0%":
         if "↑" in delta_text:
@@ -93,6 +126,9 @@ def kpi_tile(title: str, value: str, delta_text: str = None, is_positive: bool =
         </div>
     """, unsafe_allow_html=True)
 
+# ------------------------------------------------------------
+# Altair charts
+# ------------------------------------------------------------
 def alt_bar(df, x, y, title=None, horizontal=False, color="#1459d2", height=320):
     if df.empty:
         st.info("No data for this chart.")
@@ -157,12 +193,18 @@ def alt_donut_status(df, label_col="status", value_col="cnt", title=None, height
         chart = chart.properties(title=title)
     st.altair_chart(chart, use_container_width=True)
 
+# ------------------------------------------------------------
+# Vendor WHERE clause builder
+# ------------------------------------------------------------
 def build_vendor_where(selected_vendor: str) -> str:
     if selected_vendor == "All Vendors":
         return ""
     safe_vendor = selected_vendor.replace("'", "''")
     return f"AND UPPER(v.vendor_name) = UPPER('{safe_vendor}')"
 
+# ------------------------------------------------------------
+# SQL safety helpers
+# ------------------------------------------------------------
 def is_safe_sql(sql: str) -> bool:
     sql_lower = sql.lower().strip()
     if not sql_lower.startswith("select"):
@@ -181,6 +223,9 @@ def ensure_limit(sql: str, default_limit: int = 100) -> str:
         return sql
     return f"{sql.rstrip(';')} LIMIT {default_limit}"
 
+# ------------------------------------------------------------
+# Auto‑chart for arbitrary DataFrame (used in Genie)
+# ------------------------------------------------------------
 def auto_chart(df: pd.DataFrame) -> Union[alt.Chart, None]:
     if df.empty or len(df) > 200:
         return None
