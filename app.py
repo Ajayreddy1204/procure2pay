@@ -29,23 +29,8 @@ st.set_page_config(
     page_icon=":bar_chart:",
 )
 
-# ---------------------------- Query parameter handling for navigation ----------------------------
-# Parse URL parameters (e.g., ?page=Invoices&search_invoice=9001767)
-query_params = st.query_params
-if "page" in query_params:
-    st.session_state.page = query_params["page"]
-if "search_invoice" in query_params:
-    # Clean and store the invoice number for the Invoices page
-    inv_num = clean_invoice_number(query_params["search_invoice"])
-    st.session_state.inv_search_q = inv_num
-    st.session_state.invoice_search_term = inv_num
-    # Reset status filter to show all results for the search
-    st.session_state.invoice_status_filter = "All Status"
-# Remove query params so they don't persist on subsequent reruns
-st.query_params.clear()
-
 # ---------------------------- Athena configuration ----------------------------
-DATABASE = "procure2pay"
+DATABASE = "procure2pay"          # database in AWS Athena (under AwsDataCatalog)
 ATHENA_REGION = "us-east-1"
 BEDROCK_MODEL_ID = "amazon.nova-micro-v1:0"
 
@@ -185,9 +170,7 @@ def kpi_tile(title: str, value: str, delta_text: str = None, is_positive: bool =
     """, unsafe_allow_html=True)
 
 # ---------------------------- Full Semantic Model YAML (adapted for Athena) ----------------------------
-# The original YAML refers to Snowflake schema "PROCURE2PAY.INFORMATION_MART".
-# We replace it with {DATABASE} (procure2pay) and lower-case table names as per user's Athena views.
-# We do this at runtime.
+# All references to INFORMATION_MART have been removed and replaced with the procure2pay database.
 RAW_SEMANTIC_MODEL_YAML = """
 name: "P2P Procure-to-Pay Analytics"
 description: "Procure-to-Pay and Invoice-to-Pay analytics. Invoice status (Open, Due, Overdue, Disputed, Paid), vendor spend, payment performance, aging, PO linkage, cost reduction opportunities."
@@ -210,7 +193,7 @@ custom_instructions: |
   - REGION DETAILS: dim_region maps REGION_CODE to REGION_NAME for human-readable region names. Join via REGION_CODE.
   - PO HEADER DETAILS: dim_po now includes PO_DATE, PO_CREATED_DATE, DELIVERY_DATE, PO_DOC_TYPE, PO_PAYMENT_TERMS, PO_RELEASE_STATUS, PURCHASING_ORG, PURCHASING_GROUP. Use for PO lifecycle analysis, delivery tracking, and procurement lead time questions.
   - Exclude CANCELLED and REJECTED from spend metrics unless specifically asked.
-  - CASH FLOW FORECAST (CRITICAL): For "Forecast cash outflow for the next 7, 14, 30, 60, and 90 days" you MUST use verified query cash_flow_forecast (table cash_flow_forecast). It returns FORECAST_BUCKET, INVOICE_COUNT, TOTAL_AMOUNT, EARLIEST_DUE, LATEST_DUE. Present ALL rows: TOTAL_UNPAID, OVERDUE_NOW, DUE_7_DAYS, DUE_14_DAYS, DUE_30_DAYS, DUE_60_DAYS, DUE_90_DAYS, BEYOND_90_DAYS (and PROCESSING_LAG_DAYS if present). Do NOT aggregate to a single total or single bar; show the full bucket breakdown in both the table and the chart. Then give 3-5 prescriptive recommendations.
+  - CASH FLOW FORECAST (CRITICAL): For "Forecast cash outflow for the next 7, 14, 30, 60, and 90 days" you MUST use verified query cash_flow_forecast (table cash_flow_forecast). It returns FORECAST_BUCKET, INVOICE_COUNT, TOTAL_AMOUNT, EARLIEST_DUE, LATEST_DUE. Present ALL rows: TOTAL_UNPAID, OVERDUE_NOW, DUE_7_DAYS, DUE_14_DAYS, DUE_30_DAYS, DUE_60_DAYS, DUE_90_DAYS (and PROCESSING_LAG_DAYS if present). Do NOT aggregate to a single total or single bar; show the full bucket breakdown in both the table and the chart. Then give 3-5 prescriptive recommendations.
   - PAYMENT TIMING AND EARLY PAYMENT DISCOUNTS (CRITICAL): For "Which invoices should we pay early to capture discounts?" you MUST use verified query early_payment_candidates. Do NOT say the model lacks discount data—the query returns DOCUMENT_NUMBER, VENDOR_NAME, INVOICE_AMOUNT_LOCAL, DUE_DATE, SAVINGS_IF_2PCT_DISCOUNT, EARLY_PAY_PRIORITY. Present that table and cite it. For "optimal payment timing", "payment strategy for this week", "when should we pay": USE verified query payment_timing_recommendation (RECOMMENDATION, AMOUNT, INVOICE_COUNT, RATIONALE). NEVER claim payment schedules or discount data are missing.
   - GR/IR ROOT CAUSE & FOLLOW-UP: For GR/IR questions that ask about root causes (missing goods receipt, missing invoice, price/quantity mismatch) or vendor follow-up messages, USE gr_ir_aging, gr_ir_outstanding, gr_ir_working_capital_release, and gr_ir_hotspots_clearing_plan as needed. Do NOT say the data is missing. Instead, clearly explain that you are inferring likely root causes from aging and outstanding balances, and then provide concrete remediation steps or example email templates.
 
@@ -218,8 +201,7 @@ tables:
   - name: fact_invoices
     description: "Unified invoice fact with status, amounts, PO linkage, aging. Use for spend, vendor, status, overdue, disputed. posting_date = when invoice was posted; use for this month, last month, YTD."
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: FACT_ALL_SOURCES_VW
     time_dimensions:
       - name: posting_date
@@ -271,8 +253,7 @@ tables:
   - name: ap_balance
     description: "AP balance and invoice count by year/month"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: ACCOUNTS_PAYABLE_BALANCE_VW
     dimensions:
       - name: year
@@ -297,14 +278,12 @@ tables:
   - name: days_payable_outstanding
     description: "DPO by invoice. Columns: INVOICE_NUMBER, YEAR, MONTH, AVG_TRADE_PAYABLES, COGS_AMOUNT, DPO"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: DAYS_PAYABLE_OUTSTANDING_VW
   - name: dim_company_code
     description: "Company code dimension with full master data. Columns: COMPANY_CODE, COMPANY_NAME, CITY, COUNTRY_CODE, CURRENCY, POSTAL_CODE, STREET, REGION_CODE, VAT_REG_NUMBER, CHART_OF_ACCOUNTS, SYSTEM"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: DIM_COMPANY_CODE_VW
     primary_key:
       columns:
@@ -345,8 +324,7 @@ tables:
   - name: dim_po
     description: "Purchase order dimension with header details. Columns: PURCHASE_ORDER_NUMBER, PO_ITEM, PO_AMOUNT, VENDOR_ID, COMPANY_CODE, PO_DATE, PO_CREATED_DATE, PO_DOC_TYPE, PO_PAYMENT_TERMS, PURCHASING_ORG, PURCHASING_GROUP, PO_CURRENCY, PO_RELEASE_STATUS, DELIVERY_DATE, QUANTITY_DELIVERED, QUANTITY_REMAINING"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: DIM_PO_VW
     primary_key:
       columns:
@@ -416,8 +394,7 @@ tables:
   - name: dim_plant
     description: "Plant dimension with master data. Columns: PLANT_CODE, PLANT_NAME, PLANT_NAME_2, COMPANY_CODE, COUNTRY_CODE, REGION_CODE, CITY, POSTAL_CODE, STREET, SYSTEM"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: DIM_PLANT_VW
     primary_key:
       columns:
@@ -451,8 +428,7 @@ tables:
   - name: dim_region
     description: "Region dimension mapping codes to names. Columns: COUNTRY_CODE, REGION_CODE, REGION_NAME"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: DIM_REGION_VW
     primary_key:
       columns:
@@ -474,8 +450,7 @@ tables:
   - name: dim_vendor
     description: "Vendor dimension. Columns: VENDOR_ID, VENDOR_NAME, SYSTEM"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: DIM_VENDOR_VW
     primary_key:
       columns:
@@ -492,32 +467,27 @@ tables:
   - name: duplicate_payments
     description: "Duplicate payments. Columns: INVOICE_NUMBER, YEAR, MONTH, DUPLICATE_PAYMENT_AMOUNT, TOTAL_PAYMENTS, DUPLICATE_PAYMENT_RATE"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: DUPLICATE_PAYMENTS_FOR_INVOICE_VW
   - name: invoice_status_history
     description: "Full invoice status history with ALL invoice details. One row per status change. Use MAX(SEQUENCE_NBR) for latest record. Columns include: INVOICE_NUMBER, STATUS, SEQUENCE_NBR, EFFECTIVE_DATE, POSTING_DATE, DUE_DATE, VENDOR_ID, INVOICE_AMOUNT_LOCAL, PAYMENT_DATE, CLEARING_DOCUMENT, AGING_DAYS, PURCHASE_ORDER_REFERENCE, PO_AMOUNT, PO_PURPOSE, DOCUMENT_TYPE, DISCOUNT_PERCENT, REGION, SYSTEM"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: INVOICE_STATUS_HISTORY_VW
   - name: fact_po_level
     description: "PO-level fact. Columns: POSTING_YEAR, POSTING_MONTH, DELIVERY_DATE, RECEIVED_QTY, ORDERED_QTY, PO_AMOUNT"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: FACT_SAP_PO_LEVEL_VW
   - name: full_payment_rate
     description: "Full payment rate. Columns: YEAR, MONTH, FULL_PAID_INVOICES, TOTAL_CLEARED_INVOICES, FULL_PAYMENT_RATE_PCT"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: FULL_PAYMENT_RATE_VW
   - name: gr_ir_aging
     description: "GR/IR aging. Columns: YEAR, MONTH, AGE_DAYS, TOTAL_GRIR_BALANCE, GRIR_OVER_30/60/90"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: GR_IR_AGING_VW
     primary_key:
       columns:
@@ -558,8 +528,7 @@ tables:
   - name: gr_ir_outstanding
     description: "GR/IR outstanding. Columns: YEAR, MONTH, INVOICE_COUNT, TOTAL_GRIR_BLNC"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: GR_IR_OUTSTANDING_BALANCE_VW
     primary_key:
       columns:
@@ -584,14 +553,12 @@ tables:
   - name: late_accruals
     description: "Late accruals. Columns: YEAR, MONTH, LATE_ACCRUAL_AMOUNT, LATE_ACCRUAL_RATE_PCT"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: LATE_ACCRUALS_VW
   - name: late_payment_amount
     description: "Late payment. Columns: YEAR, MONTH, LATE_PAYMENT_AMOUNT, LATE_PAYMENT_COUNT, LATE_PAYMENT_RATE_PCT"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: LATE_PAYMENT_AMOUNT_VW
     primary_key:
       columns:
@@ -620,44 +587,37 @@ tables:
   - name: net_early_payment_benefit
     description: "Early payment benefit. Columns: TOTAL_NET_BENEFIT, TOTAL_SPEND, NEPBI_PERCENT"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: NET_EARLY_PAYMENT_BENEFIT_INDEX_VW
   - name: on_time_payment_rate
     description: "On-time payment rate. Columns: YEAR, MONTH, ON_TIME_PAYMENTS, TOTAL_PAYMENTS, ON_TIME_PAYMENT_RATE_PCT"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: ON_TIME_PAYMENT_RATE_VW
   - name: partial_payment_rate
     description: "Partial payment rate. Columns: YEAR, MONTH, PARTIAL_PAID_INVOICES, PARTIAL_PAYMENT_RATE_PCT"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: PARTIAL_PAYMENT_RATE_VW
   - name: payment_predictability
     description: "Payment predictability. Columns: POSTING_YEAR, POSTING_MONTH, PAYMENT_PREDICTABILITY_INDEX, INTERPRETATION"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: PAYMENT_PREDICTABILITY_INDEX_VW
   - name: payment_cycle_time
     description: "Payment cycle time. Columns: YEAR, MONTH, AVG_PAYMENT_CYCLE_TIME_DAYS, CLEARED_INVOICES"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: PAYMENT_PROCESSING_CYCLE_TIME_VW
   - name: supplier_delivery_accuracy
     description: "Supplier delivery. Columns: YEAR, MONTH, ON_TIME_DELIVERIES, TOTAL_DELIVERIES, DELIVERY_ACCURACY_PCT"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: SUPPLIER_DELIVERY_ACCURACY_INDEX_VW
   - name: weighted_dpo
     description: "Weighted DPO. Columns: YEAR, MONTH, TOTAL_PAYABLES, TOTAL_COGS, WEIGHTED_DPO"
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: WEIGHTED_DAYS_PAYABLE_OUTSTANDING_VW
     primary_key:
       columns:
@@ -686,8 +646,7 @@ tables:
   - name: cash_flow_unpaid_obligations
     description: "Unpaid invoice obligations (Open, Due, Overdue) for cash flow forecasting and payment timing. Use for: cash flow forecast 7/14/30/60/90 days, optimal payment timing, which invoices to pay early, early payment discounts. Columns: DOCUMENT_NUMBER, VENDOR_ID, INVOICE_AMOUNT_LOCAL, DUE_DATE, INVOICE_STATUS, DAYS_UNTIL_DUE. Use verified queries cash_flow_forecast, early_payment_candidates, payment_timing_recommendation for best results."
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: CASH_FLOW_UNPAID_OBLIGATIONS_VW
     primary_key:
       columns:
@@ -723,8 +682,7 @@ tables:
   - name: cash_flow_forecast
     description: "Pre-built cash flow forecast by time bucket. Columns: FORECAST_BUCKET (TOTAL_UNPAID, OVERDUE_NOW, DUE_7_DAYS, DUE_14_DAYS, DUE_30_DAYS, DUE_60_DAYS, DUE_90_DAYS, BEYOND_90_DAYS, PROCESSING_LAG_DAYS), INVOICE_COUNT, TOTAL_AMOUNT, EARLIEST_DUE, LATEST_DUE. Use for 'Forecast cash outflow for the next 7, 14, 30, 60, and 90 days'."
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: CASH_FLOW_FORECAST_VW
     primary_key:
       columns:
@@ -757,8 +715,7 @@ tables:
   - name: early_payment_candidates
     description: "Top invoices to pay early for discount capture. Columns: DOCUMENT_NUMBER, VENDOR_ID, VENDOR_NAME, INVOICE_AMOUNT_LOCAL, DUE_DATE, DAYS_UNTIL_DUE, SAVINGS_IF_2PCT_DISCOUNT, VENDOR_TIER, EARLY_PAY_PRIORITY. Use for 'Which invoices should we pay early to capture discounts?'."
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: EARLY_PAYMENT_CANDIDATES_VW
     primary_key:
       columns:
@@ -807,8 +764,7 @@ tables:
   - name: payment_timing_recommendation
     description: "Optimal payment timing strategy for the week. Columns: RECOMMENDATION (PAY_IMMEDIATELY, PAY_THIS_WEEK, EARLY_PAY_OPPORTUNITY, HOLD_FOR_CASH), AMOUNT, INVOICE_COUNT, RATIONALE. Use for 'What is the optimal payment timing strategy for this week?'."
     base_table:
-      database: PROCURE2PAY
-      schema: INFORMATION_MART
+      database: procure2pay
       table: PAYMENT_TIMING_RECOMMENDATION_VW
     primary_key:
       columns:
@@ -890,7 +846,7 @@ verified_queries:
     use_as_onboarding_question: true
     sql: |
       WITH base AS (
-        SELECT * FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        SELECT * FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED') AND POSTING_DATE IS NOT NULL
       ),
       this_month AS (
@@ -941,7 +897,7 @@ verified_queries:
     question: "Why is our procurement spend higher this month?"
     sql: |
       WITH base AS (
-        SELECT * FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        SELECT * FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED') AND POSTING_DATE IS NOT NULL
       ),
       drivers AS (
@@ -983,7 +939,7 @@ verified_queries:
     question: "Why is our procurement spend higher or lower this month?"
     sql: |
       WITH base AS (
-        SELECT * FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        SELECT * FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED') AND POSTING_DATE IS NOT NULL
       ),
       this_month AS (
@@ -1034,7 +990,7 @@ verified_queries:
     question: "Is our procurement spend higher this quarter than last quarter? If yes or no what are the reasons?"
     sql: |
       WITH base AS (
-        SELECT * FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        SELECT * FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED') AND POSTING_DATE IS NOT NULL
       ),
       this_q AS (SELECT SUM(INVOICE_AMOUNT_LOCAL) AS spend FROM base WHERE DATE_TRUNC('quarter', POSTING_DATE) = DATE_TRUNC('quarter', CURRENT_DATE())),
@@ -1064,7 +1020,7 @@ verified_queries:
   - name: why_spend_higher_lower_this_quarter
     question: "Why is our procurement spend higher or lower this quarter?"
     sql: |
-      WITH base AS (SELECT * FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED') AND POSTING_DATE IS NOT NULL),
+      WITH base AS (SELECT * FROM procure2pay.FACT_ALL_SOURCES_VW WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED') AND POSTING_DATE IS NOT NULL),
       this_q AS (SELECT SUM(INVOICE_AMOUNT_LOCAL) AS spend FROM base WHERE DATE_TRUNC('quarter', POSTING_DATE) = DATE_TRUNC('quarter', CURRENT_DATE())),
       last_q AS (SELECT SUM(INVOICE_AMOUNT_LOCAL) AS spend FROM base WHERE DATE_TRUNC('quarter', POSTING_DATE) = DATE_TRUNC('quarter', DATEADD('quarter', -1, CURRENT_DATE()))),
       summary AS (SELECT 'SUMMARY' AS ROW_TYPE, 'Total' AS DRIVER, (SELECT spend FROM this_q) AS THIS_QUARTER_SPEND, (SELECT spend FROM last_q) AS LAST_QUARTER_SPEND, CASE WHEN (SELECT spend FROM last_q) > 0 THEN ROUND(((SELECT spend FROM this_q) - (SELECT spend FROM last_q)) * 100.0 / (SELECT spend FROM last_q), 1) ELSE NULL END AS CHANGE_PCT),
@@ -1076,7 +1032,7 @@ verified_queries:
     question: "Is our procurement spend higher this year than last year? If yes or no what are the reasons?"
     sql: |
       WITH base AS (
-        SELECT * FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        SELECT * FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED') AND POSTING_DATE IS NOT NULL
       ),
       this_y AS (SELECT SUM(INVOICE_AMOUNT_LOCAL) AS spend FROM base WHERE DATE_TRUNC('year', POSTING_DATE) = DATE_TRUNC('year', CURRENT_DATE())),
@@ -1106,7 +1062,7 @@ verified_queries:
   - name: why_spend_higher_lower_this_year
     question: "Why is our procurement spend higher or lower this year?"
     sql: |
-      WITH base AS (SELECT * FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED') AND POSTING_DATE IS NOT NULL),
+      WITH base AS (SELECT * FROM procure2pay.FACT_ALL_SOURCES_VW WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED') AND POSTING_DATE IS NOT NULL),
       this_y AS (SELECT SUM(INVOICE_AMOUNT_LOCAL) AS spend FROM base WHERE DATE_TRUNC('year', POSTING_DATE) = DATE_TRUNC('year', CURRENT_DATE())),
       last_y AS (SELECT SUM(INVOICE_AMOUNT_LOCAL) AS spend FROM base WHERE DATE_TRUNC('year', POSTING_DATE) = DATE_TRUNC('year', DATEADD('year', -1, CURRENT_DATE()))),
       summary AS (SELECT 'SUMMARY' AS ROW_TYPE, 'Total' AS DRIVER, (SELECT spend FROM this_y) AS THIS_YEAR_SPEND, (SELECT spend FROM last_y) AS LAST_YEAR_SPEND, CASE WHEN (SELECT spend FROM last_y) > 0 THEN ROUND(((SELECT spend FROM this_y) - (SELECT spend FROM last_y)) * 100.0 / (SELECT spend FROM last_y), 1) ELSE NULL END AS CHANGE_PCT),
@@ -1119,7 +1075,7 @@ verified_queries:
     use_as_onboarding_question: true
     sql: |
       WITH base AS (
-        SELECT * FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        SELECT * FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
       ),
       tot_spend AS (SELECT COALESCE(SUM(INVOICE_AMOUNT_LOCAL), 1) AS s FROM base),
@@ -1158,7 +1114,7 @@ verified_queries:
           COALESCE(LATE_PAYMENT_AMOUNT, 0) AS AMOUNT,
           CONCAT(COALESCE(LATE_PAYMENT_COUNT, 0), ' late payments') AS FINDING,
           'Improve cycle time; automate approvals; capture early payment discounts' AS RECOMMENDED_ACTION
-        FROM (SELECT * FROM PROCURE2PAY.INFORMATION_MART.LATE_PAYMENT_AMOUNT_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 1)
+        FROM (SELECT * FROM procure2pay.LATE_PAYMENT_AMOUNT_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 1)
       ),
       early_benefit AS (
         SELECT '5_Early_Payment_Discount' AS OPPORTUNITY_AREA,
@@ -1166,7 +1122,7 @@ verified_queries:
           COALESCE(TOTAL_NET_BENEFIT, 0) AS AMOUNT,
           CONCAT('Current benefit: ', ROUND(COALESCE(NEPBI_PERCENT, 0), 2), '% of spend') AS FINDING,
           'Increase early payments to capture more discount; target NEPBI > 2%' AS RECOMMENDED_ACTION
-        FROM PROCURE2PAY.INFORMATION_MART.NET_EARLY_PAYMENT_BENEFIT_INDEX_VW
+        FROM procure2pay.NET_EARLY_PAYMENT_BENEFIT_INDEX_VW
       ),
       dup_pmt AS (
         SELECT '6_Duplicate_Payments' AS OPPORTUNITY_AREA,
@@ -1174,7 +1130,7 @@ verified_queries:
           ROUND(COALESCE(SUM(DUPLICATE_PAYMENT_AMOUNT), 0), 2) AS AMOUNT,
           CONCAT(COALESCE(COUNT(*), 0), ' invoices with potential duplicates') AS FINDING,
           'Implement duplicate check before payment; reconcile regularly' AS RECOMMENDED_ACTION
-        FROM PROCURE2PAY.INFORMATION_MART.DUPLICATE_PAYMENTS_FOR_INVOICE_VW WHERE DUPLICATE_PAYMENT_AMOUNT > 0
+        FROM procure2pay.DUPLICATE_PAYMENTS_FOR_INVOICE_VW WHERE DUPLICATE_PAYMENT_AMOUNT > 0
       ),
       grir AS (
         SELECT '7_GRIR_Clearing' AS OPPORTUNITY_AREA,
@@ -1182,7 +1138,7 @@ verified_queries:
           COALESCE(TOTAL_GRIR_BLNC, 0) AS AMOUNT,
           CONCAT(COALESCE(INVOICE_COUNT, 0), ' items in GR/IR') AS FINDING,
           'Clear GR/IR items; match receipts to invoices to reduce working capital' AS RECOMMENDED_ACTION
-        FROM (SELECT * FROM PROCURE2PAY.INFORMATION_MART.GR_IR_OUTSTANDING_BALANCE_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 1)
+        FROM (SELECT * FROM procure2pay.GR_IR_OUTSTANDING_BALANCE_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 1)
       ),
       spend_cat AS (
         SELECT '8_Spend_By_Category' AS OPPORTUNITY_AREA,
@@ -1208,7 +1164,7 @@ verified_queries:
     use_as_onboarding_question: true
     sql: |
       WITH base AS (
-        SELECT * FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        SELECT * FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
       ),
       total_spend_ytd AS (SELECT SUM(INVOICE_AMOUNT_LOCAL) AS value_num FROM base WHERE POSTING_DATE <= CURRENT_DATE()),
@@ -1236,15 +1192,15 @@ verified_queries:
       SELECT F.VENDOR_ID, COALESCE(V.VENDOR_NAME, 'Unknown') AS VENDOR_NAME,
         COUNT(DISTINCT F.DOCUMENT_NUMBER) AS INVOICE_COUNT, SUM(F.INVOICE_AMOUNT_LOCAL) AS TOTAL_SPEND,
         ROUND(SUM(F.INVOICE_AMOUNT_LOCAL) * 100.0 / NULLIF(SUM(SUM(F.INVOICE_AMOUNT_LOCAL)) OVER (), 0), 2) AS SPEND_SHARE_PCT
-      FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW F
-      LEFT JOIN PROCURE2PAY.INFORMATION_MART.DIM_VENDOR_VW V ON F.VENDOR_ID = V.VENDOR_ID
+      FROM procure2pay.FACT_ALL_SOURCES_VW F
+      LEFT JOIN procure2pay.DIM_VENDOR_VW V ON F.VENDOR_ID = V.VENDOR_ID
       WHERE UPPER(F.INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
       GROUP BY F.VENDOR_ID, V.VENDOR_NAME ORDER BY TOTAL_SPEND DESC;
 
   - name: payment_performance
     question: "Show payment delays and cycle time issues"
     sql: |
-      SELECT * FROM PROCURE2PAY.INFORMATION_MART.PAYMENT_PROCESSING_CYCLE_TIME_VW
+      SELECT * FROM procure2pay.PAYMENT_PROCESSING_CYCLE_TIME_VW
       ORDER BY YEAR DESC, MONTH DESC;
 
   - name: invoice_aging
@@ -1256,7 +1212,7 @@ verified_queries:
           posting_date,
           invoice_amount_local AS invoice_amount,
           aging_days
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
       )
       SELECT
         CASE
@@ -1292,55 +1248,55 @@ verified_queries:
     question: "List overdue invoices with amount and aging"
     sql: |
       SELECT DOCUMENT_NUMBER, VENDOR_ID, INVOICE_AMOUNT_LOCAL, AGING_DAYS, DUE_DATE, PURCHASE_ORDER_REFERENCE, PO_PURPOSE
-      FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW WHERE INVOICE_STATUS = 'Overdue'
+      FROM procure2pay.FACT_ALL_SOURCES_VW WHERE INVOICE_STATUS = 'Overdue'
       ORDER BY AGING_DAYS DESC, INVOICE_AMOUNT_LOCAL DESC LIMIT 50;
 
   - name: disputed_invoices
     question: "Show disputed invoices"
     sql: |
       SELECT DOCUMENT_NUMBER, VENDOR_ID, INVOICE_AMOUNT_LOCAL, AGING_DAYS, DUE_DATE, POSTING_DATE, PURCHASE_ORDER_REFERENCE
-      FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW WHERE INVOICE_STATUS = 'Disputed'
+      FROM procure2pay.FACT_ALL_SOURCES_VW WHERE INVOICE_STATUS = 'Disputed'
       ORDER BY INVOICE_AMOUNT_LOCAL DESC;
 
   - name: open_vs_paid_summary
     question: "Summary of open vs paid invoices by status"
     sql: |
       SELECT INVOICE_STATUS, COUNT(*) AS INVOICE_COUNT, SUM(INVOICE_AMOUNT_LOCAL) AS TOTAL_AMOUNT
-      FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED','REJECTED')
+      FROM procure2pay.FACT_ALL_SOURCES_VW WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED','REJECTED')
       GROUP BY INVOICE_STATUS ORDER BY TOTAL_AMOUNT DESC;
 
   - name: spend_by_po_purpose
     question: "Spend by PO purpose or invoice type"
     sql: |
       SELECT COALESCE(PO_PURPOSE,'Unknown') AS PO_PURPOSE, COUNT(*) AS INVOICE_COUNT, SUM(INVOICE_AMOUNT_LOCAL) AS TOTAL_SPEND
-      FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED','REJECTED')
+      FROM procure2pay.FACT_ALL_SOURCES_VW WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED','REJECTED')
       GROUP BY PO_PURPOSE ORDER BY TOTAL_SPEND DESC;
 
   - name: ap_balance_trend
     question: "AP balance trend by year and month"
     sql: |
-      SELECT YEAR, MONTH, AP_BALANCE, INVOICE_COUNT FROM PROCURE2PAY.INFORMATION_MART.ACCOUNTS_PAYABLE_BALANCE_VW
+      SELECT YEAR, MONTH, AP_BALANCE, INVOICE_COUNT FROM procure2pay.ACCOUNTS_PAYABLE_BALANCE_VW
       ORDER BY YEAR DESC, MONTH DESC;
 
   - name: days_payable_outstanding
     question: "Days payable outstanding (DPO)"
     sql: |
-      SELECT * FROM PROCURE2PAY.INFORMATION_MART.DAYS_PAYABLE_OUTSTANDING_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 50;
+      SELECT * FROM procure2pay.DAYS_PAYABLE_OUTSTANDING_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 50;
 
   - name: full_payment_rate
     question: "Full payment rate percentage"
     sql: |
-      SELECT * FROM PROCURE2PAY.INFORMATION_MART.FULL_PAYMENT_RATE_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 24;
+      SELECT * FROM procure2pay.FULL_PAYMENT_RATE_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 24;
 
   - name: on_time_payment_rate
     question: "On-time payment rate"
     sql: |
-      SELECT * FROM PROCURE2PAY.INFORMATION_MART.ON_TIME_PAYMENT_RATE_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 24;
+      SELECT * FROM procure2pay.ON_TIME_PAYMENT_RATE_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 24;
 
   - name: gr_ir_outstanding
     question: "GR/IR outstanding balance"
     sql: |
-      SELECT * FROM PROCURE2PAY.INFORMATION_MART.GR_IR_OUTSTANDING_BALANCE_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 24;
+      SELECT * FROM procure2pay.GR_IR_OUTSTANDING_BALANCE_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 24;
 
   - name: gr_ir_hotspots_clearing_plan
     question: "Show GR/IR outstanding balance by month and highlight which recent months have the highest GR/IR balance so we can prioritize clearing."
@@ -1350,7 +1306,7 @@ verified_queries:
         MONTH,
         INVOICE_COUNT,
         TOTAL_GRIR_BLNC
-      FROM PROCURE2PAY.INFORMATION_MART.GR_IR_OUTSTANDING_BALANCE_VW
+      FROM procure2pay.GR_IR_OUTSTANDING_BALANCE_VW
       ORDER BY YEAR DESC, MONTH DESC
       LIMIT 24;
 
@@ -1362,7 +1318,7 @@ verified_queries:
         MONTH,
         SUM(GRIR_OVER_60) AS GRIR_OVER_60_TOTAL,
         SUM(GRIR_OVER_90) AS GRIR_OVER_90_TOTAL
-      FROM PROCURE2PAY.INFORMATION_MART.GR_IR_AGING_VW
+      FROM procure2pay.GR_IR_AGING_VW
       GROUP BY YEAR, MONTH
       ORDER BY YEAR DESC, MONTH DESC
       LIMIT 24;
@@ -1378,7 +1334,7 @@ verified_queries:
         GRIR_OVER_30,
         GRIR_OVER_60,
         GRIR_OVER_90
-      FROM PROCURE2PAY.INFORMATION_MART.GR_IR_AGING_VW
+      FROM procure2pay.GR_IR_AGING_VW
       ORDER BY YEAR DESC, MONTH DESC, AGE_DAYS;
 
   - name: gr_ir_root_cause_summary
@@ -1392,7 +1348,7 @@ verified_queries:
         GRIR_OVER_30,
         GRIR_OVER_60,
         GRIR_OVER_90
-      FROM PROCURE2PAY.INFORMATION_MART.GR_IR_AGING_VW
+      FROM procure2pay.GR_IR_AGING_VW
       ORDER BY YEAR DESC, MONTH DESC, AGE_DAYS;
 
   - name: gr_ir_top_items_for_vendor_followup
@@ -1403,25 +1359,25 @@ verified_queries:
         MONTH,
         INVOICE_COUNT,
         TOTAL_GRIR_BLNC
-      FROM PROCURE2PAY.INFORMATION_MART.GR_IR_OUTSTANDING_BALANCE_VW
+      FROM procure2pay.GR_IR_OUTSTANDING_BALANCE_VW
       ORDER BY TOTAL_GRIR_BLNC DESC
       LIMIT 10;
 
   - name: late_payment_amount
     question: "Late payment amount"
     sql: |
-      SELECT * FROM PROCURE2PAY.INFORMATION_MART.LATE_PAYMENT_AMOUNT_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 24;
+      SELECT * FROM procure2pay.LATE_PAYMENT_AMOUNT_VW ORDER BY YEAR DESC, MONTH DESC LIMIT 24;
 
   - name: invoices_by_po
     question: "Invoices linked to purchase orders with PO amount"
     sql: |
       SELECT PURCHASE_ORDER_REFERENCE, PO_AMOUNT, PO_PURPOSE, COUNT(*) AS INVOICE_COUNT, SUM(INVOICE_AMOUNT_LOCAL) AS TOTAL_INVOICED
-      FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW WHERE PURCHASE_ORDER_REFERENCE IS NOT NULL
+      FROM procure2pay.FACT_ALL_SOURCES_VW WHERE PURCHASE_ORDER_REFERENCE IS NOT NULL
       GROUP BY PURCHASE_ORDER_REFERENCE, PO_AMOUNT, PO_PURPOSE ORDER BY TOTAL_INVOICED DESC;
 
   - name: cash_flow_forecast
     question: "Forecast cash outflow for the next 7, 14, 30, 60, and 90 days"
-    sql: "SELECT * FROM PROCURE2PAY.INFORMATION_MART.CASH_FLOW_FORECAST_VW"
+    sql: "SELECT * FROM procure2pay.CASH_FLOW_FORECAST_VW"
 
   # =============================================================================
   # INVOICE DISPUTE PREDICTION QUERIES
@@ -1437,7 +1393,7 @@ verified_queries:
           SUM(CASE WHEN INVOICE_STATUS = 'Disputed' THEN 1 ELSE 0 END) AS disputed_count,
           ROUND(SUM(CASE WHEN INVOICE_STATUS = 'Disputed' THEN 1 ELSE 0 END) * 100.0
                 / NULLIF(COUNT(*), 0), 2) AS vendor_dispute_rate
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
         GROUP BY VENDOR_ID
       ),
@@ -1446,7 +1402,7 @@ verified_queries:
           COALESCE(PO_PURPOSE, 'Unknown') AS PO_PURPOSE,
           ROUND(SUM(CASE WHEN INVOICE_STATUS = 'Disputed' THEN 1 ELSE 0 END) * 100.0
                 / NULLIF(COUNT(*), 0), 2) AS category_dispute_rate
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
         GROUP BY PO_PURPOSE
       ),
@@ -1454,7 +1410,7 @@ verified_queries:
         SELECT
           AVG(INVOICE_AMOUNT_LOCAL) AS avg_amount,
           STDDEV(INVOICE_AMOUNT_LOCAL) AS stddev_amount
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
       ),
       po_variance AS (
@@ -1465,7 +1421,7 @@ verified_queries:
             THEN ABS(INVOICE_AMOUNT_LOCAL - PO_AMOUNT) / PO_AMOUNT * 100
             ELSE 0
           END AS po_variance_pct
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE PURCHASE_ORDER_REFERENCE IS NOT NULL
       ),
       open_invoices AS (
@@ -1502,8 +1458,8 @@ verified_queries:
           vh.vendor_dispute_rate,
           ch.category_dispute_rate,
           pv.po_variance_pct
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW f
-        LEFT JOIN PROCURE2PAY.INFORMATION_MART.DIM_VENDOR_VW v ON f.VENDOR_ID = v.VENDOR_ID
+        FROM procure2pay.FACT_ALL_SOURCES_VW f
+        LEFT JOIN procure2pay.DIM_VENDOR_VW v ON f.VENDOR_ID = v.VENDOR_ID
         LEFT JOIN vendor_history vh ON f.VENDOR_ID = vh.VENDOR_ID
         LEFT JOIN category_history ch ON COALESCE(f.PO_PURPOSE, 'Unknown') = ch.PO_PURPOSE
         LEFT JOIN po_variance pv ON f.DOCUMENT_NUMBER = pv.DOCUMENT_NUMBER
@@ -1559,7 +1515,7 @@ verified_queries:
             ELSE 'Over $100K'
           END AS AMOUNT_BUCKET,
           CASE WHEN INVOICE_STATUS = 'Disputed' THEN 1 ELSE 0 END AS IS_DISPUTED
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
       ),
       by_category AS (
@@ -1627,7 +1583,7 @@ verified_queries:
           ROUND(SUM(CASE WHEN INVOICE_STATUS = 'Disputed' THEN 1 ELSE 0 END) * 100.0
                 / NULLIF(COUNT(*), 0), 2) AS DISPUTE_RATE_PCT,
           SUM(CASE WHEN INVOICE_STATUS = 'Disputed' THEN INVOICE_AMOUNT_LOCAL ELSE 0 END) AS DISPUTED_AMOUNT
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
           AND POSTING_DATE >= DATEADD('month', -24, CURRENT_DATE())
         GROUP BY 1
@@ -1656,8 +1612,8 @@ verified_queries:
           MIN(h2.EFFECTIVE_DATE) AS RESOLUTION_DATE,
           DATEDIFF('day', h1.EFFECTIVE_DATE, MIN(h2.EFFECTIVE_DATE)) AS DAYS_TO_RESOLVE,
           h1.PO_PURPOSE
-        FROM PROCURE2PAY.INFORMATION_MART.INVOICE_STATUS_HISTORY_VW h1
-        LEFT JOIN PROCURE2PAY.INFORMATION_MART.INVOICE_STATUS_HISTORY_VW h2
+        FROM procure2pay.INVOICE_STATUS_HISTORY_VW h1
+        LEFT JOIN procure2pay.INVOICE_STATUS_HISTORY_VW h2
           ON h1.INVOICE_NUMBER = h2.INVOICE_NUMBER
           AND h2.STATUS IN ('Paid', 'Open', 'Due')
           AND h2.EFFECTIVE_DATE > h1.EFFECTIVE_DATE
@@ -1688,7 +1644,7 @@ verified_queries:
           YEAR, MONTH,
           ON_TIME_PAYMENT_RATE_PCT,
           100 - ON_TIME_PAYMENT_RATE_PCT AS LATE_RATE_PCT
-        FROM PROCURE2PAY.INFORMATION_MART.ON_TIME_PAYMENT_RATE_VW
+        FROM procure2pay.ON_TIME_PAYMENT_RATE_VW
         ORDER BY YEAR DESC, MONTH DESC
         LIMIT 6
       ),
@@ -1697,7 +1653,7 @@ verified_queries:
       ),
       cycle_time AS (
         SELECT AVG_PAYMENT_CYCLE_TIME_DAYS AS avg_cycle
-        FROM PROCURE2PAY.INFORMATION_MART.PAYMENT_PROCESSING_CYCLE_TIME_VW
+        FROM procure2pay.PAYMENT_PROCESSING_CYCLE_TIME_VW
         ORDER BY YEAR DESC, MONTH DESC LIMIT 1
       ),
       vendor_late_history AS (
@@ -1707,7 +1663,7 @@ verified_queries:
           SUM(CASE WHEN f.AGING_DAYS > 0 AND f.INVOICE_STATUS = 'Paid' THEN 1 ELSE 0 END) AS late_count,
           ROUND(SUM(CASE WHEN f.AGING_DAYS > 0 AND f.INVOICE_STATUS = 'Paid' THEN 1 ELSE 0 END) * 100.0
                 / NULLIF(COUNT(*), 0), 2) AS vendor_late_rate
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW f
+        FROM procure2pay.FACT_ALL_SOURCES_VW f
         WHERE f.INVOICE_STATUS = 'Paid'
         GROUP BY f.VENDOR_ID
       ),
@@ -1724,8 +1680,8 @@ verified_queries:
           f.INVOICE_STATUS,
           (SELECT avg_cycle FROM cycle_time) AS AVG_CYCLE_DAYS,
           COALESCE(vlh.vendor_late_rate, (SELECT baseline_late_rate FROM avg_late_rate)) AS vendor_late_rate
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW f
-        LEFT JOIN PROCURE2PAY.INFORMATION_MART.DIM_VENDOR_VW v ON f.VENDOR_ID = v.VENDOR_ID
+        FROM procure2pay.FACT_ALL_SOURCES_VW f
+        LEFT JOIN procure2pay.DIM_VENDOR_VW v ON f.VENDOR_ID = v.VENDOR_ID
         LEFT JOIN vendor_late_history vlh ON f.VENDOR_ID = vlh.VENDOR_ID
         WHERE f.INVOICE_STATUS IN ('Open', 'Due')
       )
@@ -1799,8 +1755,8 @@ verified_queries:
           END AS AMOUNT_BUCKET,
           CASE WHEN f.AGING_DAYS > 0 THEN 1 ELSE 0 END AS WAS_LATE,
           f.AGING_DAYS
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW f
-        LEFT JOIN PROCURE2PAY.INFORMATION_MART.DIM_VENDOR_VW v ON f.VENDOR_ID = v.VENDOR_ID
+        FROM procure2pay.FACT_ALL_SOURCES_VW f
+        LEFT JOIN procure2pay.DIM_VENDOR_VW v ON f.VENDOR_ID = v.VENDOR_ID
         WHERE f.INVOICE_STATUS = 'Paid'
           AND f.POSTING_DATE >= DATEADD('month', -12, CURRENT_DATE())
       ),
@@ -1883,10 +1839,10 @@ verified_queries:
           l.LATE_PAYMENT_RATE_PCT,
           o.ON_TIME_PAYMENT_RATE_PCT,
           p.AVG_PAYMENT_CYCLE_TIME_DAYS
-        FROM PROCURE2PAY.INFORMATION_MART.LATE_PAYMENT_AMOUNT_VW l
-        LEFT JOIN PROCURE2PAY.INFORMATION_MART.ON_TIME_PAYMENT_RATE_VW o
+        FROM procure2pay.LATE_PAYMENT_AMOUNT_VW l
+        LEFT JOIN procure2pay.ON_TIME_PAYMENT_RATE_VW o
           ON l.YEAR = o.YEAR AND l.MONTH = o.MONTH
-        LEFT JOIN PROCURE2PAY.INFORMATION_MART.PAYMENT_PROCESSING_CYCLE_TIME_VW p
+        LEFT JOIN procure2pay.PAYMENT_PROCESSING_CYCLE_TIME_VW p
           ON l.YEAR = p.YEAR AND l.MONTH = p.MONTH
       )
       SELECT
@@ -1924,7 +1880,7 @@ verified_queries:
     sql: |
       WITH cycle_time AS (
         SELECT AVG_PAYMENT_CYCLE_TIME_DAYS AS avg_cycle
-        FROM PROCURE2PAY.INFORMATION_MART.PAYMENT_PROCESSING_CYCLE_TIME_VW
+        FROM procure2pay.PAYMENT_PROCESSING_CYCLE_TIME_VW
         ORDER BY YEAR DESC, MONTH DESC LIMIT 1
       ),
       risk_buckets AS (
@@ -1940,7 +1896,7 @@ verified_queries:
             WHEN DATEDIFF('day', CURRENT_DATE(), f.DUE_DATE) < (SELECT avg_cycle FROM cycle_time) + 5 THEN 'MEDIUM_RISK'
             ELSE 'ON_TRACK'
           END AS RISK_CATEGORY
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW f
+        FROM procure2pay.FACT_ALL_SOURCES_VW f
         WHERE f.INVOICE_STATUS IN ('Open', 'Due')
       )
       SELECT
@@ -1981,7 +1937,7 @@ verified_queries:
           COUNT(*) AS INVOICE_COUNT,
           SUM(INVOICE_AMOUNT_LOCAL) AS SPEND,
           COUNT(DISTINCT VENDOR_ID) AS VENDOR_COUNT
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
           AND POSTING_DATE >= DATEADD('month', -24, CURRENT_DATE())
         GROUP BY 1, 2
@@ -2014,7 +1970,7 @@ verified_queries:
           COALESCE(PO_PURPOSE, 'Unknown') AS CATEGORY,
           SUM(INVOICE_AMOUNT_LOCAL) AS THIS_MONTH_SPEND,
           COUNT(*) AS THIS_MONTH_COUNT
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
           AND DATE_TRUNC('month', POSTING_DATE) = DATE_TRUNC('month', CURRENT_DATE())
         GROUP BY PO_PURPOSE
@@ -2024,7 +1980,7 @@ verified_queries:
           COALESCE(PO_PURPOSE, 'Unknown') AS CATEGORY,
           SUM(INVOICE_AMOUNT_LOCAL) AS LAST_MONTH_SPEND,
           COUNT(*) AS LAST_MONTH_COUNT
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
           AND DATE_TRUNC('month', POSTING_DATE) = DATE_TRUNC('month', DATEADD('month', -1, CURRENT_DATE()))
         GROUP BY PO_PURPOSE
@@ -2034,7 +1990,7 @@ verified_queries:
           COALESCE(PO_PURPOSE, 'Unknown') AS CATEGORY,
           SUM(INVOICE_AMOUNT_LOCAL) AS YTD_SPEND,
           COUNT(*) AS YTD_COUNT
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
           AND DATE_TRUNC('year', POSTING_DATE) = DATE_TRUNC('year', CURRENT_DATE())
         GROUP BY PO_PURPOSE
@@ -2043,7 +1999,7 @@ verified_queries:
         SELECT
           COALESCE(PO_PURPOSE, 'Unknown') AS CATEGORY,
           SUM(INVOICE_AMOUNT_LOCAL) AS LAST_YEAR_YTD_SPEND
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
           AND POSTING_DATE >= DATE_TRUNC('year', DATEADD('year', -1, CURRENT_DATE()))
           AND POSTING_DATE < DATEADD('year', -1, CURRENT_DATE())
@@ -2080,7 +2036,7 @@ verified_queries:
           TO_CHAR(POSTING_DATE, 'Mon') AS MONTH_NAME,
           COALESCE(PO_PURPOSE, 'Unknown') AS CATEGORY,
           SUM(INVOICE_AMOUNT_LOCAL) AS SPEND
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
           AND POSTING_DATE >= DATEADD('year', -3, CURRENT_DATE())
         GROUP BY 1, 2, 3, 4
@@ -2128,7 +2084,7 @@ verified_queries:
           SUM(INVOICE_AMOUNT_LOCAL) AS SPEND,
           COUNT(*) AS INVOICE_COUNT,
           COUNT(DISTINCT VENDOR_ID) AS ACTIVE_VENDORS
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW
+        FROM procure2pay.FACT_ALL_SOURCES_VW
         WHERE UPPER(INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
           AND POSTING_DATE >= DATEADD('month', -24, CURRENT_DATE())
         GROUP BY 1, 2
@@ -2210,8 +2166,8 @@ verified_queries:
           v.VENDOR_NAME,
           SUM(f.INVOICE_AMOUNT_LOCAL) AS VENDOR_SPEND,
           COUNT(*) AS INVOICE_COUNT
-        FROM PROCURE2PAY.INFORMATION_MART.FACT_ALL_SOURCES_VW f
-        LEFT JOIN PROCURE2PAY.INFORMATION_MART.DIM_VENDOR_VW v ON f.VENDOR_ID = v.VENDOR_ID
+        FROM procure2pay.FACT_ALL_SOURCES_VW f
+        LEFT JOIN procure2pay.DIM_VENDOR_VW v ON f.VENDOR_ID = v.VENDOR_ID
         WHERE UPPER(f.INVOICE_STATUS) NOT IN ('CANCELLED', 'REJECTED')
           AND f.POSTING_DATE >= DATEADD('year', -1, CURRENT_DATE())
         GROUP BY 1, 2, 3
@@ -2268,11 +2224,11 @@ verified_queries:
 
   - name: early_payment_candidates
     question: "Which invoices should we pay early to capture discounts?"
-    sql: "SELECT * FROM PROCURE2PAY.INFORMATION_MART.EARLY_PAYMENT_CANDIDATES_VW"
+    sql: "SELECT * FROM procure2pay.EARLY_PAYMENT_CANDIDATES_VW"
 
   - name: payment_timing_recommendation
     question: "What is the optimal payment timing strategy for this week?"
-    sql: "SELECT * FROM PROCURE2PAY.INFORMATION_MART.PAYMENT_TIMING_RECOMMENDATION_VW"
+    sql: "SELECT * FROM procure2pay.PAYMENT_TIMING_RECOMMENDATION_VW"
 
   - name: first_pass_pos
     question: "Show me first pass PO's - purchase orders where all invoices were paid without disputes or overdue"
@@ -2286,7 +2242,7 @@ verified_queries:
           FISCAL_YEAR,
           MAX(CASE WHEN UPPER(STATUS) IN ('DISPUTED','OVERDUE') THEN 1 ELSE 0 END) AS HAS_ISSUE,
           MAX(CASE WHEN UPPER(STATUS) IN ('PAID','CLEARED') THEN 1 ELSE 0 END) AS IS_PAID
-        FROM PROCURE2PAY.INFORMATION_MART.INVOICE_STATUS_HISTORY_VW
+        FROM procure2pay.INVOICE_STATUS_HISTORY_VW
         WHERE PURCHASE_ORDER_REFERENCE IS NOT NULL
         GROUP BY
           PURCHASE_ORDER_REFERENCE,
@@ -2314,15 +2270,8 @@ verified_queries:
         AND INVOICE_COUNT > 0;
 """
 
-# Adapt the YAML to Athena: replace schema with {DATABASE} and lower-case table names
-def adapt_semantic_model_for_athena(yaml_str: str) -> str:
-    # Replace the database/schema part
-    adapted = yaml_str.replace("PROCURE2PAY.INFORMATION_MART.", f"{DATABASE}.")
-    # Also replace table names that are in uppercase (though Athena is case-insensitive, but we keep as is)
-    # The user's views are lower-case, but Athena accepts either. We'll keep as is.
-    return adapted
-
-FULL_SEMANTIC_MODEL_YAML = adapt_semantic_model_for_athena(RAW_SEMANTIC_MODEL_YAML)
+# Since the YAML is now fully adapted, we can directly use it.
+FULL_SEMANTIC_MODEL_YAML = RAW_SEMANTIC_MODEL_YAML
 
 SYSTEM_PROMPT = f"""
 You are an AI assistant that helps users query a procurement database using SQL (Athena/Presto). Given a user's natural language question, generate a valid SQL query for Athena (Presto dialect) based on the following semantic model.
