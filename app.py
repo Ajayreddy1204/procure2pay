@@ -11,7 +11,7 @@ init_db()
 
 st.markdown("""
 <style>
-/* Reduce top padding of the main container to bring content up */
+/* Reduce top padding */
 .block-container {
     padding-top: 0.5rem !important;
     padding-bottom: 0rem !important;
@@ -33,32 +33,35 @@ st.markdown("""
     font-weight: 900;
     margin-top: 6px;
 }
-.yash-header-logo {
-    height: 60px !important;
-    max-height: 60px !important;
-    width: auto !important;
-    object-fit: contain !important;
-}
-/* Move title up and navigation down */
+/* Title - push far left */
 .title-section {
+    text-align: left;
     margin-top: -0.5rem;
     margin-bottom: 0rem;
+    padding-left: 0;
 }
+/* Navigation - centered */
 .nav-section {
     margin-top: 0.5rem;
     margin-bottom: 0rem;
+    text-align: center;
 }
+/* Logo - top right */
 .logo-container {
     display: flex;
     justify-content: flex-end;
     align-items: flex-start;
     height: 100%;
 }
+/* Remove any extra padding on left column */
+.stColumn:first-child {
+    padding-left: 0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# Header: Title (left), Navigation (center), Logo (right, aligned top)
-col_title, col_nav, col_logo = st.columns([1, 3, 1])
+# Header: Title (left), Navigation (center), Logo (right)
+col_title, col_nav, col_logo = st.columns([1.2, 2.8, 1])
 
 with col_title:
     st.markdown('<div class="title-section">', unsafe_allow_html=True)
