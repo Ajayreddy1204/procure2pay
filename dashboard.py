@@ -9,7 +9,7 @@ from utils import (
     sql_date, prior_window, build_vendor_where, pct_delta, safe_number, safe_int,
     abbr_currency, kpi_tile, alt_bar, alt_line_monthly, alt_donut_status, clean_invoice_number
 )
-
+ 
 # ------------------------------------------------------------
 # Helper: Render KPI row (2 rows of 4 cards)
 # ------------------------------------------------------------
@@ -18,7 +18,7 @@ def render_kpi_row(kpis):
     for i, kpi in enumerate(kpis):
         with cols[i]:
             kpi_tile(kpi["title"], kpi["value"], kpi.get("delta"), kpi.get("is_positive", True))
-
+ 
 # ------------------------------------------------------------
 # Helper: Filter bar – NO internal rerun
 # ------------------------------------------------------------
@@ -27,9 +27,9 @@ def render_filters():
     rng_start, rng_end = st.session_state.date_range
     selected_vendor = st.session_state.selected_vendor
     current_preset = st.session_state.preset
-
+ 
     col_date, col_vendor, col_preset = st.columns([1.4, 1.4, 2.2])
-
+ 
     with col_date:
         date_range = st.date_input(
             "Date Range",
@@ -43,7 +43,7 @@ def render_filters():
             if (new_start, new_end) != (rng_start, rng_end):
                 st.session_state.date_range = (new_start, new_end)
                 st.session_state.preset = "Custom"
-
+ 
     with col_vendor:
         vendor_cache_key = f"vendor_list_{rng_start}_{rng_end}"
         if vendor_cache_key not in st.session_state:
@@ -67,7 +67,7 @@ def render_filters():
         )
         if selected != selected_vendor:
             st.session_state.selected_vendor = selected
-
+ 
     with col_preset:
         presets = ["Last 30 Days", "QTD", "YTD", "Custom"]
         p_cols = st.columns(4)
@@ -81,11 +81,11 @@ def render_filters():
                         new_start, new_end = compute_range_preset(p)
                         st.session_state.date_range = (new_start, new_end)
                         st.session_state.preset = p
-
+ 
     return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.selected_vendor
-
+ 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (pill tabs, clickable invoice pill)
+# Helper: Needs Attention Section (pill tabs, redesigned cards)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     # Session state for tabs and pagination
@@ -93,10 +93,10 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         st.session_state.na_tab = "Overdue"
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
-
+ 
     active_tab = st.session_state.na_tab
     page = st.session_state.na_page
-
+ 
     # Counts for tabs
     counts_sql = f"""
         SELECT
@@ -112,9 +112,9 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     disputed_count = safe_int(cnt_df.loc[0,"disputed_count"]) if not cnt_df.empty else 33
     due_count = safe_int(cnt_df.loc[0,"due_count"]) if not cnt_df.empty else 1
     total_attention = overdue_count + disputed_count + due_count
-
+ 
     st.subheader(f"Needs Attention ({total_attention})")
-
+ 
     # Pill tabs
     tab_cols = st.columns(3)
     with tab_cols[0]:
@@ -132,12 +132,13 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                      type="primary" if active_tab == "Due" else "secondary"):
             st.session_state.na_tab = "Due"
             st.session_state.na_page = 0
-
+ 
     # Build query for the selected tab
     if active_tab == "Overdue":
         attention_sql = f"""
             SELECT
                 f.invoice_number,
+                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -156,6 +157,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         attention_sql = f"""
             SELECT
                 f.invoice_number,
+                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -173,6 +175,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         attention_sql = f"""
             SELECT
                 f.invoice_number,
+                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -188,29 +191,24 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         status_label = "Due soon"
         status_color = "#2563eb"
         status_bg = "#dbeafe"
-
+ 
     attention_df = run_query(attention_sql)
-
-    # If no data, use sample data (with integer invoice numbers)
+ 
+    # Fallback sample data if query returns empty
     if attention_df.empty:
         sample_data = [
-            {"invoice_number": 90064, "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
-            {"invoice_number": 90053, "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
-            {"invoice_number": 90064, "amount": 1600, "vendor_name": "Emerson Electric", "due_date": "2026-02-19"},
-            {"invoice_number": 90046, "amount": 2200, "vendor_name": "McMaster-Carr", "due_date": "2026-02-19"},
-            {"invoice_number": 90056, "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
-            {"invoice_number": 90074, "amount": 15400, "vendor_name": "MSC Industrial", "due_date": "2026-02-19"},
-            {"invoice_number": 90082, "amount": 13400, "vendor_name": "Sonepar USA", "due_date": "2026-02-23"},
-            {"invoice_number": 90007, "amount": 2800, "vendor_name": "Emerson Electric", "due_date": "2026-02-25"}
+            {"invoice_number": "90064", "sub_id": "59", "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
+            {"invoice_number": "90053", "sub_id": "89", "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
+            {"invoice_number": "90064", "sub_id": "18", "amount": 1600, "vendor_name": "Emerson Electric", "due_date": "2026-02-19"},
+            {"invoice_number": "90046", "sub_id": "07", "amount": 2200, "vendor_name": "McMaster-Carr", "due_date": "2026-02-19"},
+            {"invoice_number": "90056", "sub_id": "77", "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
+            {"invoice_number": "90074", "sub_id": "88", "amount": 15400, "vendor_name": "MSC Industrial", "due_date": "2026-02-19"},
+            {"invoice_number": "90082", "sub_id": "70", "amount": 13400, "vendor_name": "Sonepar USA", "due_date": "2026-02-23"},
+            {"invoice_number": "90007", "sub_id": "38", "amount": 2800, "vendor_name": "Emerson Electric", "due_date": "2026-02-25"}
         ]
         attention_df = pd.DataFrame(sample_data)
         attention_df['due_date'] = pd.to_datetime(attention_df['due_date'])
-    else:
-        # Convert invoice_number to integer (remove .0)
-        attention_df['invoice_number'] = attention_df['invoice_number'].apply(
-            lambda x: int(float(x)) if pd.notna(x) else 0
-        )
-
+ 
     # Pagination: 8 cards per page
     items_per_page = 8
     total_items = len(attention_df)
@@ -218,10 +216,10 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     start_idx = page * items_per_page
     end_idx = min(start_idx + items_per_page, total_items)
     page_df = attention_df.iloc[start_idx:end_idx]
-
+ 
     # CSS for pill tabs and cards
     st.markdown("""
-    <style>
+<style>
     /* Pill tabs styling */
     div[data-testid="column"] button {
         border-radius: 40px !important;
@@ -244,23 +242,29 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         transform: translateY(-3px);
         box-shadow: 0 8px 20px rgba(0,0,0,0.1);
     }
-    /* Pill button for invoice number */
-    .invoice-pill {
-        background-color: #3b82f6;
-        color: white;
-        border-radius: 9999px;
-        padding: 6px 12px;
-        font-size: 0.9rem;
-        font-weight: 600;
+    /* Circular badge */
+    .circular-badge {
+        background-color: #f3f4f6;
+        border-radius: 50%;
+        width: 65px;
+        height: 65px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
         text-align: center;
-        display: inline-block;
-        margin-bottom: 8px;
-        cursor: pointer;
-        border: none;
-        width: auto;
+        font-weight: bold;
+        box-shadow: inset 0 0 0 1px #e5e7eb;
     }
-    .invoice-pill:hover {
-        background-color: #2563eb;
+    .invoice-num {
+        font-size: 1.1rem;
+        font-weight: 800;
+        color: #1f2937;
+    }
+    .small-num {
+        font-size: 0.7rem;
+        color: #6b7280;
+        margin-top: -2px;
     }
     /* Status label */
     .status-label {
@@ -269,7 +273,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         padding: 2px 8px;
         border-radius: 20px;
         display: inline-block;
-        margin-left: auto;
     }
     /* Amount */
     .card-amount {
@@ -290,44 +293,39 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         font-size: 0.7rem;
         color: #6b7280;
     }
-    </style>
+</style>
     """, unsafe_allow_html=True)
-
+ 
     def render_card(row):
-        inv_num = int(row['invoice_number'])  # already integer
+        inv_num = str(row['invoice_number'])
+        sub_id = str(row['sub_id']) if pd.notna(row['sub_id']) else ""
         amount = safe_number(row['amount'])
         vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else "Unknown"
         due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
-
-        # Use a Streamlit button for the invoice pill (clickable)
-        # We'll place the button inside a container and use columns for layout
-        with st.container():
-            # Row 1: invoice pill (left) and status badge (right)
-            col_pill, col_status = st.columns([1, 1])
-            with col_pill:
-                if st.button(str(inv_num), key=f"inv_pill_{inv_num}", help="View invoice details", use_container_width=True):
-                    st.session_state.selected_invoice = str(inv_num)
-                    st.session_state.page = "Invoices"
-                    st.rerun()
-            with col_status:
-                st.markdown(f'<div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>', unsafe_allow_html=True)
-            
-            # Amount, vendor, due date
-            st.markdown(f'<div class="card-amount">{abbr_currency(amount)}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="vendor-name">{vendor}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="due-date">Due: {due_date}</div>', unsafe_allow_html=True)
-
+ 
+        st.markdown(f"""
+<div class="attention-card">
+<div style="display: flex; justify-content: space-between; align-items: flex-start;">
+<div class="circular-badge">
+<div class="invoice-num">{inv_num}</div>
+<div class="small-num">{sub_id}</div>
+</div>
+<div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>
+</div>
+<div class="card-amount">{abbr_currency(amount)}</div>
+<div class="vendor-name">{vendor}</div>
+<div class="due-date">Due: {due_date}</div>
+</div>
+        """, unsafe_allow_html=True)
+ 
     # Display cards in rows of 4
     for i in range(0, len(page_df), 4):
         cols = st.columns(4)
         for j in range(4):
             if i + j < len(page_df):
                 with cols[j]:
-                    with st.container():
-                        st.markdown('<div class="attention-card">', unsafe_allow_html=True)
-                        render_card(page_df.iloc[i + j])
-                        st.markdown('</div>', unsafe_allow_html=True)
-
+                    render_card(page_df.iloc[i + j])
+ 
     # Pagination controls
     col_prev, col_info, col_next = st.columns([1,2,1])
     with col_prev:
@@ -338,14 +336,14 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     with col_next:
         if st.button("Next →", disabled=(page >= total_pages-1)):
             st.session_state.na_page = page + 1
-
+ 
 # ------------------------------------------------------------
 # Helper: Charts section (donut, top vendors, spend trend)
 # ------------------------------------------------------------
 def render_charts(rng_start, rng_end, vendor_where):
     start_lit = sql_date(rng_start)
     end_lit = sql_date(rng_end)
-
+ 
     # 1. Donut chart: Invoice Status Distribution
     status_sql = f"""
         SELECT
@@ -361,7 +359,7 @@ def render_charts(rng_start, rng_end, vendor_where):
         GROUP BY 1
     """
     status_df = run_query(status_sql)
-
+ 
     # 2. Top 10 Vendors by Spend (horizontal bar chart, green)
     top_vendors_sql = f"""
         SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local,0)) AS spend
@@ -372,7 +370,7 @@ def render_charts(rng_start, rng_end, vendor_where):
         GROUP BY 1 ORDER BY spend DESC LIMIT 10
     """
     top_df = run_query(top_vendors_sql)
-
+ 
     # 3. Spend Trend Analysis: Actual (green) + Forecast (blue)
     trend_sql = f"""
         SELECT
@@ -399,7 +397,7 @@ def render_charts(rng_start, rng_end, vendor_where):
         ).properties(height=300, title="Spend Trend (Actual vs Forecast)")
     else:
         spend_chart = None
-
+ 
     # Render three columns
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -421,7 +419,7 @@ def render_charts(rng_start, rng_end, vendor_where):
             st.altair_chart(spend_chart, use_container_width=True)
         else:
             st.info("No trend data")
-
+ 
 # ------------------------------------------------------------
 # Main render function
 # ------------------------------------------------------------
@@ -437,18 +435,18 @@ def render_dashboard():
         st.session_state.na_tab = "Overdue"
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
-
+ 
     # Render filter bar (updates session state via widgets)
     rng_start, rng_end, selected_vendor = render_filters()
     vendor_where = build_vendor_where(selected_vendor)
-
+ 
     # Date literals
     start_lit = sql_date(rng_start)
     end_lit = sql_date(rng_end)
     p_start, p_end = prior_window(rng_start, rng_end)
     p_start_lit = sql_date(p_start)
     p_end_lit = sql_date(p_end)
-
+ 
     # ---------- KPI Queries ----------
     cur_kpi_sql = f"""
         SELECT
@@ -470,7 +468,7 @@ def render_dashboard():
     cur_active_vendors = safe_int(cur_df.loc[0,"active_vendors"]) if not cur_df.empty else 38
     cur_pending = safe_int(cur_df.loc[0,"pending_inv"]) if not cur_df.empty else 180
     cur_avg_processing = safe_number(cur_df.loc[0,"avg_processing_days"]) if not cur_df.empty else 71.0
-
+ 
     prev_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -491,19 +489,19 @@ def render_dashboard():
     prev_active_vendors = safe_int(prev_df.loc[0,"active_vendors"]) if not prev_df.empty else 60
     prev_pending = safe_int(prev_df.loc[0,"pending_inv"]) if not prev_df.empty else 90
     prev_avg_processing = safe_number(prev_df.loc[0,"avg_processing_days"]) if not prev_df.empty else 71.1
-
+ 
     # Compute deltas
     spend_delta, spend_up = pct_delta(cur_spend, prev_spend)
     active_pos_delta, active_pos_up = pct_delta(cur_active_pos, prev_active_pos)
     total_pos_delta, total_pos_up = pct_delta(cur_total_pos, prev_total_pos)
     active_vendors_delta, active_vendors_up = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, pending_up = pct_delta(cur_pending, prev_pending)
-
+ 
     # Avg processing time delta
     avg_delta = cur_avg_processing - prev_avg_processing
     avg_delta_str = f"↓ {abs(avg_delta):.1f}d" if avg_delta < 0 else f"↑ {avg_delta:.1f}d" if avg_delta > 0 else "0.0d"
     avg_up = avg_delta > 0
-
+ 
     # First pass & auto rates
     first_pass_sql = f"""
         WITH hist AS (
@@ -527,7 +525,7 @@ def render_dashboard():
     fp_delta = first_pass_rate - prev_fp_rate
     fp_delta_str = f"↑ {fp_delta:.1f}%" if fp_delta > 0 else f"↓ {abs(fp_delta):.1f}%"
     fp_up = fp_delta > 0
-
+ 
     auto_rate_sql = f"""
         WITH paid_invoices AS (
             SELECT invoice_number, status_notes
@@ -544,7 +542,7 @@ def render_dashboard():
     total_cleared = safe_int(auto_df.loc[0,"total_cleared"]) if not auto_df.empty else 0
     auto_proc = safe_int(auto_df.loc[0,"auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0.0
-
+ 
     # ----- ROW 1 KPIs -----
     row1_kpis = [
         {"title": "TOTAL SPEND", "value": abbr_currency(cur_spend), "delta": spend_delta, "is_positive": spend_up},
@@ -553,7 +551,7 @@ def render_dashboard():
         {"title": "ACTIVE VENDORS", "value": f"{cur_active_vendors:,}", "delta": active_vendors_delta, "is_positive": active_vendors_up}
     ]
     render_kpi_row(row1_kpis)
-
+ 
     # ----- ROW 2 KPIs -----
     row2_kpis = [
         {"title": "PENDING INVOICES", "value": f"{cur_pending:,}", "delta": pending_delta, "is_positive": pending_up},
@@ -562,13 +560,13 @@ def render_dashboard():
         {"title": "AUTOPROCESSED INVOICES %", "value": f"{auto_rate:.1f}%", "delta": None, "is_positive": True}
     ]
     render_kpi_row(row2_kpis)
-
+ 
     st.markdown("---")
-
+ 
     # Needs Attention section
     render_needs_attention(rng_start, rng_end, vendor_where)
-
+ 
     st.markdown("---")
-
+ 
     # Charts section
     render_charts(rng_start, rng_end, vendor_where)
