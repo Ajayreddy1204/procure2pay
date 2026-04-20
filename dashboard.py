@@ -7,7 +7,7 @@ from config import compute_range_preset, DATABASE
 from athena_client import run_query
 from utils import (
     sql_date, prior_window, build_vendor_where, pct_delta, safe_number, safe_int,
-    abbr_currency, kpi_tile, alt_bar, clean_invoice_number
+    abbr_currency, kpi_tile, alt_bar, clean_invoice_number, alt_donut_status
 )
 
 # ------------------------------------------------------------
@@ -90,7 +90,7 @@ def render_filters():
     return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.get("selected_vendor", "All Vendors")
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (grid of cards using st.columns)
+# Helper: Needs Attention Section (grid with clickable invoice pill buttons)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     # Counts for tabs
@@ -207,7 +207,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     end_idx = min(start_idx + items_per_page, total_items)
     page_df = attention_df.iloc[start_idx:end_idx]
 
-    # Card styling
+    # Custom CSS to make the button inside the card look like the original pill
     st.markdown("""
     <style>
     .attention-card {
@@ -223,20 +223,22 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         transform: translateY(-2px);
         box-shadow: 0 8px 16px rgba(0,0,0,0.1);
     }
-    .invoice-pill {
-        display: inline-block;
-        background-color: #3b82f6;
-        color: white;
-        border-radius: 9999px;
-        padding: 4px 12px;
-        font-size: 0.9rem;
-        font-weight: 600;
-        margin-bottom: 8px;
-        cursor: pointer;
-        text-decoration: none;
+    /* Style the button inside the card to look exactly like the invoice pill */
+    .attention-card button {
+        background-color: #3b82f6 !important;
+        color: white !important;
+        border-radius: 9999px !important;
+        padding: 4px 12px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        border: none !important;
+        margin-bottom: 8px !important;
+        width: auto !important;
+        display: inline-block !important;
+        line-height: 1.2 !important;
     }
-    .invoice-pill:hover {
-        background-color: #2563eb;
+    .attention-card button:hover {
+        background-color: #2563eb !important;
     }
     .status-badge {
         display: inline-block;
@@ -264,26 +266,28 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     </style>
     """, unsafe_allow_html=True)
 
-    # Helper to render a single card
+    # Helper to render one card
     def render_card(row):
         inv_num = clean_invoice_number(row['invoice_number'])
         amount = safe_number(row['amount'])
         vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else "Unknown"
         due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
-        inv_link = f"?page=Invoices&search_invoice={inv_num}"
-        st.markdown(f"""
-            <div class="attention-card">
-                <a href="{inv_link}" target="_self" style="text-decoration: none;">
-                    <div class="invoice-pill">{inv_num}</div>
-                </a>
+
+        with st.container():
+            # Clickable button styled as pill
+            if st.button(inv_num, key=f"inv_pill_{inv_num}", help="View invoice details"):
+                st.session_state.selected_invoice = inv_num
+                st.session_state.page = "Invoices"
+                st.rerun()
+            # Status badge, amount, vendor, due date
+            st.markdown(f"""
                 <div class="status-badge" style="background:{badge_bg}; color:{badge_color};">{status_label}</div>
                 <div class="amount">{abbr_currency(amount)}</div>
                 <div class="vendor-name">{vendor}</div>
                 <div class="due-date">Due: {due_date}</div>
-            </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
-    # Display cards in rows of 4 using st.columns
+    # Display cards in rows of 4
     for i in range(0, len(page_df), 4):
         cols = st.columns(4)
         for j in range(4):
@@ -371,7 +375,6 @@ def render_charts(rng_start, rng_end, vendor_where):
         if not status_df.empty:
             total = status_df['cnt'].sum()
             st.markdown(f"**Invoice Status Distribution** (Total: {total})")
-            from utils import alt_donut_status
             alt_donut_status(status_df, label_col="status", value_col="cnt", title="", height=300)
         else:
             st.info("No status data")
