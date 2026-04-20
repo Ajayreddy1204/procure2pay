@@ -14,7 +14,6 @@ from utils import (
 # Helper: Render KPI row (2 rows of 4 cards)
 # ------------------------------------------------------------
 def render_kpi_row(kpis):
-    """kpis: list of dicts with keys: title, value, delta, is_positive"""
     cols = st.columns(len(kpis))
     for i, kpi in enumerate(kpis):
         with cols[i]:
@@ -24,12 +23,10 @@ def render_kpi_row(kpis):
 # Helper: Filter bar (date, vendor, preset buttons)
 # ------------------------------------------------------------
 def render_filters():
-    # Get current values from session state
     rng_start, rng_end = st.session_state.get("date_range", compute_range_preset("YTD"))
     selected_vendor = st.session_state.get("selected_vendor", "All Vendors")
     current_preset = st.session_state.get("preset", "YTD")
 
-    # Three columns: date, vendor, preset buttons
     col_date, col_vendor, col_preset = st.columns([1.4, 1.4, 2.2])
 
     with col_date:
@@ -90,7 +87,7 @@ def render_filters():
     return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.get("selected_vendor", "All Vendors")
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (grid with clickable invoice pill buttons)
+# Helper: Needs Attention Section (grid with light‑colored cards)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     # Counts for tabs
@@ -153,6 +150,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         status_label = "Overdue"
         badge_color = "#dc2626"
         badge_bg = "#fee2e2"
+        card_bg = "#FFF5F5"  # very light red
     elif active_tab == "Disputed":
         attention_sql = f"""
             SELECT
@@ -171,6 +169,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         status_label = "Disputed"
         badge_color = "#d97706"
         badge_bg = "#fef3c7"
+        card_bg = "#FFFBEB"  # very light orange
     else:
         attention_sql = f"""
             SELECT
@@ -191,6 +190,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         status_label = "Due soon"
         badge_color = "#2563eb"
         badge_bg = "#dbeafe"
+        card_bg = "#EFF6FF"  # very light blue
 
     attention_df = run_query(attention_sql)
 
@@ -198,7 +198,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         st.info("No attention items found.")
         return
 
-    # Pagination: 8 cards per page (2 rows of 4)
     items_per_page = 8
     total_items = len(attention_df)
     total_pages = (total_items - 1) // items_per_page + 1
@@ -207,24 +206,23 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     end_idx = min(start_idx + items_per_page, total_items)
     page_df = attention_df.iloc[start_idx:end_idx]
 
-    # Custom CSS to make the button inside the card look like the original pill
-    st.markdown("""
+    # Custom CSS – cards now have a light background (card_bg) and subtle border
+    st.markdown(f"""
     <style>
-    .attention-card {
-        background-color: white;
+    .attention-card {{
+        background-color: {card_bg};
         border-radius: 16px;
         padding: 1rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        border: 1px solid #e2e8f0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        border: 1px solid rgba(0,0,0,0.08);
         transition: transform 0.2s;
         height: 100%;
-    }
-    .attention-card:hover {
+    }}
+    .attention-card:hover {{
         transform: translateY(-2px);
         box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-    }
-    /* Style the button inside the card to look exactly like the invoice pill */
-    .attention-card button {
+    }}
+    .attention-card button {{
         background-color: #3b82f6 !important;
         color: white !important;
         border-radius: 9999px !important;
@@ -236,37 +234,36 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         width: auto !important;
         display: inline-block !important;
         line-height: 1.2 !important;
-    }
-    .attention-card button:hover {
+    }}
+    .attention-card button:hover {{
         background-color: #2563eb !important;
-    }
-    .status-badge {
+    }}
+    .status-badge {{
         display: inline-block;
         font-size: 0.7rem;
         font-weight: 600;
         padding: 2px 10px;
         border-radius: 9999px;
         margin-bottom: 8px;
-    }
-    .amount {
+    }}
+    .amount {{
         font-size: 1.2rem;
         font-weight: 700;
         margin: 8px 0;
-    }
-    .vendor-name {
+    }}
+    .vendor-name {{
         font-size: 0.85rem;
         font-weight: 500;
         color: #1f2937;
-    }
-    .due-date {
+    }}
+    .due-date {{
         font-size: 0.7rem;
         color: #6b7280;
         margin-top: 6px;
-    }
+    }}
     </style>
     """, unsafe_allow_html=True)
 
-    # Helper to render one card
     def render_card(row):
         inv_num = clean_invoice_number(row['invoice_number'])
         amount = safe_number(row['amount'])
@@ -274,12 +271,10 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
 
         with st.container():
-            # Clickable button styled as pill – navigates to Invoices tab
             if st.button(inv_num, key=f"inv_pill_{inv_num}", help="View invoice details"):
                 st.session_state.selected_invoice = inv_num
                 st.session_state.page = "Invoices"
                 st.rerun()
-            # Status badge, amount, vendor, due date
             st.markdown(f"""
                 <div class="status-badge" style="background:{badge_bg}; color:{badge_color};">{status_label}</div>
                 <div class="amount">{abbr_currency(amount)}</div>
@@ -355,7 +350,6 @@ def render_charts(rng_start, rng_end, vendor_where):
     trend_df = run_query(trend_sql)
     if not trend_df.empty:
         trend_df['month_str'] = pd.to_datetime(trend_df['month']).dt.strftime('%b %Y')
-        # Simple forecast: 3-month moving average
         trend_df['forecast_spend'] = trend_df['actual_spend'].rolling(3, min_periods=1).mean().shift(1).fillna(trend_df['actual_spend'])
         trend_melted = trend_df.melt(id_vars=['month_str'], value_vars=['actual_spend', 'forecast_spend'],
                                      var_name='type', value_name='spend')
@@ -369,7 +363,6 @@ def render_charts(rng_start, rng_end, vendor_where):
     else:
         spend_chart = None
 
-    # Render three columns
     col1, col2, col3 = st.columns(3)
     with col1:
         if not status_df.empty:
@@ -395,7 +388,6 @@ def render_charts(rng_start, rng_end, vendor_where):
 # Main render function
 # ------------------------------------------------------------
 def render_dashboard():
-    # Initialise session state defaults
     if "preset" not in st.session_state:
         st.session_state.preset = "YTD"
     if "date_range" not in st.session_state:
@@ -407,20 +399,16 @@ def render_dashboard():
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
 
-    # Render filter bar (updates session state)
     rng_start, rng_end, selected_vendor = render_filters()
-
-    # Compute where clause
     vendor_where = build_vendor_where(selected_vendor)
 
-    # Date literals
     start_lit = sql_date(rng_start)
     end_lit = sql_date(rng_end)
     p_start, p_end = prior_window(rng_start, rng_end)
     p_start_lit = sql_date(p_start)
     p_end_lit = sql_date(p_end)
 
-    # ---------- KPI Queries ----------
+    # KPI queries (same as before, omitted for brevity – included in the full file)
     cur_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -435,7 +423,6 @@ def render_dashboard():
         {vendor_where}
     """
     cur_df = run_query(cur_kpi_sql)
-    # Use fallback numbers from spec if query returns no data
     cur_spend = safe_number(cur_df.loc[0,"total_spend"]) if not cur_df.empty else 5_500_000
     cur_active_pos = safe_int(cur_df.loc[0,"active_pos"]) if not cur_df.empty else 147
     cur_total_pos = safe_int(cur_df.loc[0,"total_pos"]) if not cur_df.empty else 474
@@ -464,19 +451,16 @@ def render_dashboard():
     prev_pending = safe_int(prev_df.loc[0,"pending_inv"]) if not prev_df.empty else 90
     prev_avg_processing = safe_number(prev_df.loc[0,"avg_processing_days"]) if not prev_df.empty else 71.1
 
-    # Compute deltas
     spend_delta, spend_up = pct_delta(cur_spend, prev_spend)
     active_pos_delta, active_pos_up = pct_delta(cur_active_pos, prev_active_pos)
     total_pos_delta, total_pos_up = pct_delta(cur_total_pos, prev_total_pos)
     active_vendors_delta, active_vendors_up = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, pending_up = pct_delta(cur_pending, prev_pending)
 
-    # Avg processing time delta
     avg_delta = cur_avg_processing - prev_avg_processing
     avg_delta_str = f"↓ {abs(avg_delta):.1f}d" if avg_delta < 0 else f"↑ {avg_delta:.1f}d" if avg_delta > 0 else "0.0d"
     avg_up = avg_delta > 0
 
-    # First pass & auto rates
     first_pass_sql = f"""
         WITH hist AS (
             SELECT invoice_number,
@@ -517,7 +501,6 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0,"auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0.0
 
-    # ----- ROW 1 KPIs -----
     row1_kpis = [
         {"title": "TOTAL SPEND", "value": abbr_currency(cur_spend), "delta": spend_delta, "is_positive": spend_up},
         {"title": "ACTIVE PO's", "value": f"{cur_active_pos:,}", "delta": active_pos_delta, "is_positive": active_pos_up},
@@ -526,7 +509,6 @@ def render_dashboard():
     ]
     render_kpi_row(row1_kpis)
 
-    # ----- ROW 2 KPIs -----
     row2_kpis = [
         {"title": "PENDING INVOICES", "value": f"{cur_pending:,}", "delta": pending_delta, "is_positive": pending_up},
         {"title": "AVG INVOICE PROCESSING TIME", "value": f"{cur_avg_processing:.1f}d", "delta": avg_delta_str, "is_positive": avg_up},
@@ -536,11 +518,6 @@ def render_dashboard():
     render_kpi_row(row2_kpis)
 
     st.markdown("---")
-
-    # Needs Attention section
     render_needs_attention(rng_start, rng_end, vendor_where)
-
     st.markdown("---")
-
-    # Charts section
     render_charts(rng_start, rng_end, vendor_where)
