@@ -11,8 +11,9 @@ init_db()
 
 st.markdown("""
 <style>
+/* Reduce top padding to bring content higher */
 .block-container {
-    padding-top: 0.5rem !important;
+    padding-top: 0rem !important;
     padding-bottom: 0rem !important;
 }
 .kpi {
@@ -32,10 +33,10 @@ st.markdown("""
     font-weight: 900;
     margin-top: 6px;
 }
-/* Title - push far left */
+/* Title - move up */
 .title-section {
     text-align: left;
-    margin-top: -0.5rem;
+    margin-top: -1rem;
     margin-bottom: 0rem;
     padding-left: 0rem;
 }
@@ -51,7 +52,7 @@ st.markdown("""
     align-items: flex-start;
     height: 100%;
 }
-/* Remove any extra padding on left column */
+/* Remove extra padding on left column */
 .stColumn:first-child {
     padding-left: 0 !important;
     padding-right: 0.5rem !important;
@@ -59,7 +60,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Adjust column ratios: give more width to left column for title
+# Header: Title (left), Navigation (center), Logo (right)
 col_title, col_nav, col_logo = st.columns([1.6, 2.4, 1])
 
 with col_title:
