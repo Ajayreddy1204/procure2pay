@@ -40,6 +40,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Header: Title (left), Navigation (center), Logo (right, aligned top)
 col_title, col_nav, col_logo = st.columns([1, 3, 1])
 with col_title:
     st.markdown("<h1 style='font-weight: bold; margin-bottom: 0;'>ProcureIQ</h1>", unsafe_allow_html=True)
@@ -64,7 +65,15 @@ with col_nav:
             st.session_state.page = "Invoices"
             st.rerun()
 with col_logo:
-    st.image(LOGO_URL, width=80)
+    # Larger logo, aligned top-right
+    st.markdown(
+        f"""
+        <div style="display: flex; justify-content: flex-end; align-items: flex-start; height: 100%;">
+            <img src="{LOGO_URL}" style="width: 100px; height: auto; object-fit: contain;" />
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 st.markdown("---")
 
 if "page" not in st.session_state:
