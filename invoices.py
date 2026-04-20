@@ -7,12 +7,11 @@ from utils import clean_invoice_number, abbr_currency, safe_number, safe_int
 from config import DATABASE
 
 # ------------------------------------------------------------
-# Helper: Render Invoice Detail View
+# Helper: Render Invoice Detail View (Enhanced & Colorful)
 # ------------------------------------------------------------
 def render_invoice_detail(inv_row: dict, inv_num: str):
-    """Render the detailed invoice view with all sections."""
+    """Render the detailed invoice view with attractive layout and styling."""
     
-    # Helper to safely get value and convert dates to string
     def get_val(key, default=""):
         val = inv_row.get(key, default)
         if pd.isna(val):
@@ -21,7 +20,7 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
             return val.strftime("%Y-%m-%d")
         return val
 
-    # Genie Insights Banner
+    # ---- Genie Insights Banner ----
     aging_days = get_val("aging_days", 0)
     try:
         due_date = inv_row.get("due_date")
@@ -29,42 +28,55 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
             aging_days = (date.today() - due_date).days
     except:
         pass
-    
+
     st.markdown(f"""
-    <div style="background-color: #f3e8ff; border-left: 5px solid #9333ea; padding: 14px 18px; border-radius: 10px; margin-bottom: 24px;">
-        <strong style="font-size: 1rem;">🔍 Genie Insights</strong><br/>
-        Recommend immediate review of invoice {inv_num} as it is overdue and has been outstanding for {aging_days} days.
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                border-radius: 12px; padding: 16px 20px; margin-bottom: 24px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+        <div style="color: white; font-size: 1.1rem; font-weight: 600;">🔍 Genie Insights</div>
+        <div style="color: #f0f0f0; margin-top: 6px;">
+            Recommend immediate review of invoice <strong>{inv_num}</strong> as it is overdue 
+            and has been outstanding for <strong>{aging_days}</strong> days.
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # Invoice Summary Section
-    st.markdown("### Invoice Summary")
+    # ---- Invoice Summary (using st.metric in two rows) ----
+    st.markdown("### 📄 Invoice Summary")
+    
+    # First row of metrics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.markdown("**Invoice Number**")
-        st.write(inv_num)
-        st.markdown("**Invoice Date**")
-        st.write(get_val("invoice_date", ""))
+        st.metric("Invoice Number", inv_num)
     with col2:
-        st.markdown("**Invoice Amount**")
-        st.write(abbr_currency(get_val("invoice_amount", 0)))
-        st.markdown("**PO Number**")
-        st.write(get_val("po_number", ""))
+        st.metric("Invoice Date", get_val("invoice_date", ""))
     with col3:
-        st.markdown("**PO Amount**")
-        st.write(abbr_currency(get_val("po_amount", 0)))
-        st.markdown("**Due Date**")
-        st.write(get_val("due_date", ""))
+        st.metric("Invoice Amount", abbr_currency(get_val("invoice_amount", 0)))
     with col4:
-        st.markdown("**Invoice Status**")
+        st.metric("PO Number", get_val("po_number", ""))
+    
+    # Second row of metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("PO Amount", abbr_currency(get_val("po_amount", 0)))
+    with col2:
+        st.metric("Due Date", get_val("due_date", ""))
+    with col3:
         status = get_val("invoice_status", "").upper()
         status_color = "#dc2626" if status == "OVERDUE" else "#16a34a" if status == "PAID" else "#f59e0b"
-        st.markdown(f"<span style='color:{status_color}; font-weight:bold;'>{status}</span>", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="background-color: #f8f9fa; border-radius: 12px; padding: 12px 8px; text-align: center;">
+            <div style="font-size: 0.9rem; color: #6c757d;">Invoice Status</div>
+            <div style="font-size: 1.5rem; font-weight: 700; color: {status_color};">{status}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col4:
+        st.metric("Aging (Days)", f"{aging_days} days" if aging_days > 0 else "0 days")
 
     st.markdown("---")
 
-    # Status History Section
-    st.markdown("### Status History")
+    # ---- Status History Table (with colored status badges) ----
+    st.markdown("### 📜 Status History")
     hist_sql = f"""
         SELECT
             invoice_number,
@@ -77,7 +89,6 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
     """
     hist_df = run_query(hist_sql)
     
-    # If no history found, create default rows from spec
     if hist_df.empty:
         hist_df = pd.DataFrame([
             {
@@ -92,9 +103,7 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
             }
         ])
     else:
-        # Ensure column names are lowercase for consistency
         hist_df.columns = [c.lower() for c in hist_df.columns]
-        # Select only needed columns
         hist_df = hist_df[["status", "effective_date", "status_notes"]].copy()
     
     # Add PAID row if button was clicked
@@ -108,26 +117,30 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
             }])
             hist_df = pd.concat([hist_df, new_row], ignore_index=True)
     
-    # Convert effective_date to string for display (if it's datetime)
+    # Convert dates to strings
     hist_df["effective_date"] = hist_df["effective_date"].apply(
         lambda x: x.strftime("%Y-%m-%d") if isinstance(x, (date, datetime)) else str(x)
     )
     
-    st.dataframe(
-        hist_df[["status", "effective_date", "status_notes"]],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "status": st.column_config.TextColumn("Status", width="small"),
-            "effective_date": st.column_config.TextColumn("Effective Date", width="small"),
-            "status_notes": st.column_config.TextColumn("Status Notes", width="large"),
-        }
-    )
+    # Define color mapping for status badges
+    def color_status(val):
+        if val == "PAID":
+            return "background-color: #d4edda; color: #155724; font-weight: bold; border-radius: 12px; padding: 2px 8px;"
+        elif val == "OVERDUE":
+            return "background-color: #f8d7da; color: #721c24; font-weight: bold; border-radius: 12px; padding: 2px 8px;"
+        elif val == "OPEN":
+            return "background-color: #fff3cd; color: #856404; font-weight: bold; border-radius: 12px; padding: 2px 8px;"
+        else:
+            return "background-color: #e2e3e5; color: #383d41; font-weight: bold; border-radius: 12px; padding: 2px 8px;"
+    
+    styled_hist = hist_df.style.applymap(color_status, subset=["status"])
+    st.dataframe(styled_hist, use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
-    # Tabs: Vendor Info & Company Info
-    tab1, tab2 = st.tabs(["Vendor Info", "Company Info"])
+    # ---- Vendor & Company Info Tabs (Styled) ----
+    st.markdown("### 🏢 Party Information")
+    tab1, tab2 = st.tabs(["🏷️ Vendor Info", "🏭 Company Info"])
     
     with tab1:
         vendor_sql = f"""
@@ -149,30 +162,40 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
             row = vendor_df.iloc[0]
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("**Vendor ID**")
-                st.write(row.get("vendor_id", ""))
-                st.markdown("**Vendor Name**")
-                st.write(row.get("vendor_name", ""))
-                st.markdown("**Alias/Name 2**")
-                st.write(row.get("vendor_name_2", ""))
+                st.markdown("**🆔 Vendor ID**")
+                st.info(row.get("vendor_id", ""))
+                st.markdown("**📛 Vendor Name**")
+                st.info(row.get("vendor_name", ""))
+                st.markdown("**📝 Alias/Name 2**")
+                st.info(row.get("vendor_name_2", ""))
             with col2:
-                st.markdown("**Country**")
-                st.write(row.get("country_code", ""))
-                st.markdown("**City**")
-                st.write(row.get("city", ""))
-                st.markdown("**Postal Code**")
-                st.write(row.get("postal_code", ""))
-                st.markdown("**Street**")
-                st.write(row.get("street", ""))
+                st.markdown("**🌍 Country**")
+                st.info(row.get("country_code", ""))
+                st.markdown("**🏙️ City**")
+                st.info(row.get("city", ""))
+                st.markdown("**📮 Postal Code**")
+                st.info(row.get("postal_code", ""))
+                st.markdown("**🏢 Street**")
+                st.info(row.get("street", ""))
         else:
-            # Fallback example data
-            st.markdown("**Vendor ID:** 0001000007")
-            st.markdown("**Vendor Name:** McMaster-Carr")
-            st.markdown("**Alias/Name 2:** VN-03608")
-            st.markdown("**Country:** NL")
-            st.markdown("**City:** Bangalore")
-            st.markdown("**Postal Code:** 13607")
-            st.markdown("**Street:** Tech Center 611")
+            # Fallback data
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**🆔 Vendor ID**")
+                st.info("0001000007")
+                st.markdown("**📛 Vendor Name**")
+                st.info("McMaster-Carr")
+                st.markdown("**📝 Alias/Name 2**")
+                st.info("VN-03608")
+            with col2:
+                st.markdown("**🌍 Country**")
+                st.info("NL")
+                st.markdown("**🏙️ City**")
+                st.info("Bangalore")
+                st.markdown("**📮 Postal Code**")
+                st.info("13607")
+                st.markdown("**🏢 Street**")
+                st.info("Tech Center 611")
     
     with tab2:
         company_sql = f"""
@@ -195,52 +218,58 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
             row = company_df.iloc[0]
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("**Company Code**")
-                st.write(row.get("company_code", ""))
-                st.markdown("**Company Name**")
-                st.write(row.get("company_name", ""))
-                st.markdown("**Plant Code**")
-                st.write(row.get("plant_code", ""))
+                st.markdown("**🏢 Company Code**")
+                st.info(row.get("company_code", ""))
+                st.markdown("**📛 Company Name**")
+                st.info(row.get("company_name", ""))
+                st.markdown("**🏭 Plant Code**")
+                st.info(row.get("plant_code", ""))
             with col2:
-                st.markdown("**Plant Name**")
-                st.write(row.get("plant_name", ""))
+                st.markdown("**🌿 Plant Name**")
+                st.info(row.get("plant_name", ""))
                 addr_parts = [row.get("street", ""), row.get("city", ""), row.get("postal_code", "")]
                 addr = ", ".join([p for p in addr_parts if p])
-                st.markdown("**Company Address**")
-                st.write(addr)
+                st.markdown("**📍 Company Address**")
+                st.info(addr)
         else:
-            st.markdown("**Company Code:** 1000")
-            st.markdown("**Company Name:** Alpha Manufacturing Inc.")
-            st.markdown("**Plant Code:** 1000")
-            st.markdown("**Plant Name:** Main Production Plant")
-            st.markdown("**Company Address:** 350 Fifth Avenue, New York 10001")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**🏢 Company Code**")
+                st.info("1000")
+                st.markdown("**📛 Company Name**")
+                st.info("Alpha Manufacturing Inc.")
+                st.markdown("**🏭 Plant Code**")
+                st.info("1000")
+            with col2:
+                st.markdown("**🌿 Plant Name**")
+                st.info("Main Production Plant")
+                st.markdown("**📍 Company Address**")
+                st.info("350 Fifth Avenue, New York 10001")
     
     st.markdown("---")
     
-    # Proceed to Pay Button
+    # ---- Proceed to Pay Button ----
     current_status = get_val("invoice_status", "").upper()
-    paid_key = f"paid_{inv_num}"
     if st.session_state.get(paid_key, False):
         st.success("✅ Invoice has been processed and marked as Paid.")
     else:
         if current_status == "PAID":
-            st.info("This invoice is already marked as PAID.")
+            st.info("ℹ️ This invoice is already marked as PAID.")
         else:
-            if st.button("Proceed to Pay", type="primary", key=f"pay_{inv_num}"):
+            if st.button("✅ Proceed to Pay", type="primary", use_container_width=True):
                 st.session_state[paid_key] = True
                 st.rerun()
 
 # ------------------------------------------------------------
-# Main Invoices Page (handles navigation from dashboard)
+# Main Invoices Page (list + detail)
 # ------------------------------------------------------------
 def render_invoices():
-    st.subheader("Invoices")
+    st.subheader("📑 Invoices")
     st.markdown("Search, track and manage all invoices in one place")
 
     # Check if an invoice was selected from Dashboard
     selected_invoice = st.session_state.get("selected_invoice", None)
     if selected_invoice:
-        # Fetch invoice details from database
         inv_sql = f"""
             SELECT
                 f.invoice_number,
@@ -269,8 +298,7 @@ def render_invoices():
         inv_df = run_query(inv_sql)
         if not inv_df.empty:
             render_invoice_detail(inv_df.iloc[0].to_dict(), selected_invoice)
-            # Back button to return to list
-            if st.button("← Back to Invoices List"):
+            if st.button("← Back to Invoices List", use_container_width=True):
                 st.session_state.selected_invoice = None
                 st.rerun()
             return
@@ -279,7 +307,11 @@ def render_invoices():
             st.session_state.selected_invoice = None
             st.rerun()
 
-    # --- Invoice List View (searchable table) ---
+    # ---- Invoice List View (same as before) ----
+    # ... (keep the existing list view code unchanged)
+    # (I'll include it for completeness, but you can keep your existing list view)
+    
+    # For brevity, I'm including the list view from previous version:
     if "invoice_search_term" not in st.session_state:
         st.session_state.invoice_search_term = ""
 
