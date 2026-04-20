@@ -11,8 +11,10 @@ init_db()
 
 st.markdown("""
 <style>
+/* Reduce top padding of the main container to bring content up */
 .block-container {
-    padding-top: 1rem;
+    padding-top: 0.5rem !important;
+    padding-bottom: 0rem !important;
 }
 .kpi {
     background: #fff;
@@ -37,15 +39,35 @@ st.markdown("""
     width: auto !important;
     object-fit: contain !important;
 }
+/* Move title up and navigation down */
+.title-section {
+    margin-top: -0.5rem;
+    margin-bottom: 0rem;
+}
+.nav-section {
+    margin-top: 0.5rem;
+    margin-bottom: 0rem;
+}
+.logo-container {
+    display: flex;
+    justify-content: flex-end;
+    align-items: flex-start;
+    height: 100%;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # Header: Title (left), Navigation (center), Logo (right, aligned top)
 col_title, col_nav, col_logo = st.columns([1, 3, 1])
+
 with col_title:
+    st.markdown('<div class="title-section">', unsafe_allow_html=True)
     st.markdown("<h1 style='font-weight: bold; margin-bottom: 0;'>ProcureIQ</h1>", unsafe_allow_html=True)
     st.markdown("<p style='font-size: 0.8rem; color: gray; margin-top: -0.2rem;'>P2P Analytics</p>", unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
 with col_nav:
+    st.markdown('<div class="nav-section">', unsafe_allow_html=True)
     nav_cols = st.columns(4)
     current_page = st.session_state.get("page", "Dashboard")
     with nav_cols[0]:
@@ -64,16 +86,18 @@ with col_nav:
         if st.button("Invoices", use_container_width=True, type="primary" if current_page == "Invoices" else "secondary"):
             st.session_state.page = "Invoices"
             st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
 with col_logo:
-    # Larger logo, aligned top-right
     st.markdown(
         f"""
-        <div style="display: flex; justify-content: flex-end; align-items: flex-start; height: 100%;">
+        <div class="logo-container">
             <img src="{LOGO_URL}" style="width: 100px; height: auto; object-fit: contain;" />
         </div>
         """,
         unsafe_allow_html=True
     )
+
 st.markdown("---")
 
 if "page" not in st.session_state:
