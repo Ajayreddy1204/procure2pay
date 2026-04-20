@@ -20,12 +20,13 @@ def render_kpi_row(kpis):
             kpi_tile(kpi["title"], kpi["value"], kpi.get("delta"), kpi.get("is_positive", True))
 
 # ------------------------------------------------------------
-# Helper: Filter bar (date, vendor, preset buttons)
+# Helper: Filter bar – NO internal rerun
 # ------------------------------------------------------------
 def render_filters():
-    rng_start, rng_end = st.session_state.get("date_range", compute_range_preset("YTD"))
-    selected_vendor = st.session_state.get("selected_vendor", "All Vendors")
-    current_preset = st.session_state.get("preset", "YTD")
+    # Ensure session state has defaults (already set in render_dashboard)
+    rng_start, rng_end = st.session_state.date_range
+    selected_vendor = st.session_state.selected_vendor
+    current_preset = st.session_state.preset
 
     col_date, col_vendor, col_preset = st.columns([1.4, 1.4, 2.2])
 
@@ -34,16 +35,14 @@ def render_filters():
             "Date Range",
             value=(rng_start, rng_end),
             format="YYYY-MM-DD",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="date_range_widget"
         )
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
             new_start, new_end = date_range
-        else:
-            new_start, new_end = rng_start, rng_end
-        if (new_start, new_end) != (rng_start, rng_end):
-            st.session_state.date_range = (new_start, new_end)
-            st.session_state.preset = "Custom"
-            st.rerun()
+            if (new_start, new_end) != (rng_start, rng_end):
+                st.session_state.date_range = (new_start, new_end)
+                st.session_state.preset = "Custom"
 
     with col_vendor:
         vendor_cache_key = f"vendor_list_{rng_start}_{rng_end}"
@@ -63,11 +62,11 @@ def render_filters():
             "Vendor",
             st.session_state[vendor_cache_key],
             index=st.session_state[vendor_cache_key].index(selected_vendor) if selected_vendor in st.session_state[vendor_cache_key] else 0,
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="vendor_selectbox"
         )
         if selected != selected_vendor:
             st.session_state.selected_vendor = selected
-            st.rerun()
 
     with col_preset:
         presets = ["Last 30 Days", "QTD", "YTD", "Custom"]
@@ -82,14 +81,18 @@ def render_filters():
                         new_start, new_end = compute_range_preset(p)
                         st.session_state.date_range = (new_start, new_end)
                         st.session_state.preset = p
-                    st.rerun()
 
-    return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.get("selected_vendor", "All Vendors")
+    # Return current values (updated by widgets)
+    return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.selected_vendor
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (grid with light‑colored cards)
+# Helper: Needs Attention Section (light‑colored cards, grid, pagination)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
+    # Session state for tabs and pagination (already initialized in render_dashboard)
+    active_tab = st.session_state.na_tab
+    page = st.session_state.na_page
+
     # Counts for tabs
     counts_sql = f"""
         SELECT
@@ -108,34 +111,29 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
 
     st.subheader(f"Needs Attention ({total_attention})")
 
-    # Tabs
+    # Tab buttons
     tab_cols = st.columns(3)
-    active_tab = st.session_state.get("na_tab", "Overdue")
     with tab_cols[0]:
         if st.button(f"Overdue ({overdue_count})", key="tab_overdue", use_container_width=True,
                      type="primary" if active_tab == "Overdue" else "secondary"):
             st.session_state.na_tab = "Overdue"
             st.session_state.na_page = 0
-            st.rerun()
     with tab_cols[1]:
         if st.button(f"Disputed ({disputed_count})", key="tab_disputed", use_container_width=True,
                      type="primary" if active_tab == "Disputed" else "secondary"):
             st.session_state.na_tab = "Disputed"
             st.session_state.na_page = 0
-            st.rerun()
     with tab_cols[2]:
         if st.button(f"Due ({due_count})", key="tab_due", use_container_width=True,
                      type="primary" if active_tab == "Due" else "secondary"):
             st.session_state.na_tab = "Due"
             st.session_state.na_page = 0
-            st.rerun()
 
-    # Build query for selected tab
+    # Build query for the selected tab
     if active_tab == "Overdue":
         attention_sql = f"""
             SELECT
                 f.invoice_number,
-                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -150,12 +148,11 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         status_label = "Overdue"
         badge_color = "#dc2626"
         badge_bg = "#fee2e2"
-        card_bg = "#FFF5F5"  # very light red
+        card_bg = "#FFF5F5"      # very light red
     elif active_tab == "Disputed":
         attention_sql = f"""
             SELECT
                 f.invoice_number,
-                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -169,12 +166,11 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         status_label = "Disputed"
         badge_color = "#d97706"
         badge_bg = "#fef3c7"
-        card_bg = "#FFFBEB"  # very light orange
-    else:
+        card_bg = "#FFFBEB"      # very light orange
+    else:  # Due soon
         attention_sql = f"""
             SELECT
                 f.invoice_number,
-                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -190,23 +186,22 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         status_label = "Due soon"
         badge_color = "#2563eb"
         badge_bg = "#dbeafe"
-        card_bg = "#EFF6FF"  # very light blue
+        card_bg = "#EFF6FF"      # very light blue
 
     attention_df = run_query(attention_sql)
-
     if attention_df.empty:
         st.info("No attention items found.")
         return
 
+    # Pagination: 8 cards per page (2 rows of 4)
     items_per_page = 8
     total_items = len(attention_df)
     total_pages = (total_items - 1) // items_per_page + 1
-    page = st.session_state.get("na_page", 0)
     start_idx = page * items_per_page
     end_idx = min(start_idx + items_per_page, total_items)
     page_df = attention_df.iloc[start_idx:end_idx]
 
-    # Custom CSS – cards now have a light background (card_bg) and subtle border
+    # Inject custom CSS for cards (light background per tab)
     st.markdown(f"""
     <style>
     .attention-card {{
@@ -264,23 +259,23 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     </style>
     """, unsafe_allow_html=True)
 
+    # Helper to render a single card
     def render_card(row):
         inv_num = clean_invoice_number(row['invoice_number'])
         amount = safe_number(row['amount'])
         vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else "Unknown"
         due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
-
-        with st.container():
-            if st.button(inv_num, key=f"inv_pill_{inv_num}", help="View invoice details"):
-                st.session_state.selected_invoice = inv_num
-                st.session_state.page = "Invoices"
-                st.rerun()
-            st.markdown(f"""
-                <div class="status-badge" style="background:{badge_bg}; color:{badge_color};">{status_label}</div>
-                <div class="amount">{abbr_currency(amount)}</div>
-                <div class="vendor-name">{vendor}</div>
-                <div class="due-date">Due: {due_date}</div>
-            """, unsafe_allow_html=True)
+        # Clickable pill button that navigates to Invoices tab
+        if st.button(inv_num, key=f"inv_pill_{inv_num}", help="View invoice details"):
+            st.session_state.selected_invoice = inv_num
+            st.session_state.page = "Invoices"
+            st.rerun()   # Only allowed rerun – changes page
+        st.markdown(f"""
+            <div class="status-badge" style="background:{badge_bg}; color:{badge_color};">{status_label}</div>
+            <div class="amount">{abbr_currency(amount)}</div>
+            <div class="vendor-name">{vendor}</div>
+            <div class="due-date">Due: {due_date}</div>
+        """, unsafe_allow_html=True)
 
     # Display cards in rows of 4
     for i in range(0, len(page_df), 4):
@@ -295,13 +290,11 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     with col_prev:
         if st.button("← Prev", disabled=(page == 0)):
             st.session_state.na_page = page - 1
-            st.rerun()
     with col_info:
         st.markdown(f"<div style='text-align:center'>Page {page+1} of {total_pages}</div>", unsafe_allow_html=True)
     with col_next:
         if st.button("Next →", disabled=(page >= total_pages-1)):
             st.session_state.na_page = page + 1
-            st.rerun()
 
 # ------------------------------------------------------------
 # Helper: Charts section (donut, top vendors, spend trend)
@@ -310,7 +303,7 @@ def render_charts(rng_start, rng_end, vendor_where):
     start_lit = sql_date(rng_start)
     end_lit = sql_date(rng_end)
 
-    # 1. Donut chart: Invoice Status Distribution
+    # 1. Donut chart
     status_sql = f"""
         SELECT
             CASE
@@ -326,7 +319,7 @@ def render_charts(rng_start, rng_end, vendor_where):
     """
     status_df = run_query(status_sql)
 
-    # 2. Top 10 Vendors by Spend (horizontal bar chart, green)
+    # 2. Top 10 vendors (horizontal bar, green)
     top_vendors_sql = f"""
         SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local,0)) AS spend
         FROM {DATABASE}.fact_all_sources_vw f
@@ -337,7 +330,7 @@ def render_charts(rng_start, rng_end, vendor_where):
     """
     top_df = run_query(top_vendors_sql)
 
-    # 3. Spend Trend Analysis: Actual (green) + Forecast (blue)
+    # 3. Spend trend (actual + forecast)
     trend_sql = f"""
         SELECT
             DATE_TRUNC('month', posting_date) AS month,
@@ -388,27 +381,30 @@ def render_charts(rng_start, rng_end, vendor_where):
 # Main render function
 # ------------------------------------------------------------
 def render_dashboard():
-    if "preset" not in st.session_state:
-        st.session_state.preset = "YTD"
+    # Initialize all session state defaults at the very beginning
     if "date_range" not in st.session_state:
         st.session_state.date_range = compute_range_preset("YTD")
     if "selected_vendor" not in st.session_state:
         st.session_state.selected_vendor = "All Vendors"
+    if "preset" not in st.session_state:
+        st.session_state.preset = "YTD"
     if "na_tab" not in st.session_state:
         st.session_state.na_tab = "Overdue"
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
 
+    # Render filters (updates session state via widgets)
     rng_start, rng_end, selected_vendor = render_filters()
     vendor_where = build_vendor_where(selected_vendor)
 
+    # Prepare date literals
     start_lit = sql_date(rng_start)
     end_lit = sql_date(rng_end)
     p_start, p_end = prior_window(rng_start, rng_end)
     p_start_lit = sql_date(p_start)
     p_end_lit = sql_date(p_end)
 
-    # KPI queries (same as before, omitted for brevity – included in the full file)
+    # ---------- KPI Queries ----------
     cur_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -451,6 +447,7 @@ def render_dashboard():
     prev_pending = safe_int(prev_df.loc[0,"pending_inv"]) if not prev_df.empty else 90
     prev_avg_processing = safe_number(prev_df.loc[0,"avg_processing_days"]) if not prev_df.empty else 71.1
 
+    # Deltas
     spend_delta, spend_up = pct_delta(cur_spend, prev_spend)
     active_pos_delta, active_pos_up = pct_delta(cur_active_pos, prev_active_pos)
     total_pos_delta, total_pos_up = pct_delta(cur_total_pos, prev_total_pos)
@@ -461,6 +458,7 @@ def render_dashboard():
     avg_delta_str = f"↓ {abs(avg_delta):.1f}d" if avg_delta < 0 else f"↑ {avg_delta:.1f}d" if avg_delta > 0 else "0.0d"
     avg_up = avg_delta > 0
 
+    # First pass rate
     first_pass_sql = f"""
         WITH hist AS (
             SELECT invoice_number,
@@ -484,6 +482,7 @@ def render_dashboard():
     fp_delta_str = f"↑ {fp_delta:.1f}%" if fp_delta > 0 else f"↓ {abs(fp_delta):.1f}%"
     fp_up = fp_delta > 0
 
+    # Auto‑processed rate
     auto_rate_sql = f"""
         WITH paid_invoices AS (
             SELECT invoice_number, status_notes
@@ -501,6 +500,7 @@ def render_dashboard():
     auto_proc = safe_int(auto_df.loc[0,"auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0.0
 
+    # ----- ROW 1 KPIs -----
     row1_kpis = [
         {"title": "TOTAL SPEND", "value": abbr_currency(cur_spend), "delta": spend_delta, "is_positive": spend_up},
         {"title": "ACTIVE PO's", "value": f"{cur_active_pos:,}", "delta": active_pos_delta, "is_positive": active_pos_up},
@@ -509,6 +509,7 @@ def render_dashboard():
     ]
     render_kpi_row(row1_kpis)
 
+    # ----- ROW 2 KPIs -----
     row2_kpis = [
         {"title": "PENDING INVOICES", "value": f"{cur_pending:,}", "delta": pending_delta, "is_positive": pending_up},
         {"title": "AVG INVOICE PROCESSING TIME", "value": f"{cur_avg_processing:.1f}d", "delta": avg_delta_str, "is_positive": avg_up},
