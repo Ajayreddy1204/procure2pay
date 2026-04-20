@@ -77,7 +77,6 @@ def render_filters():
         p_cols = st.columns(4)
         for idx, p in enumerate(presets):
             with p_cols[idx]:
-                # YTD button is primary (blue), others secondary
                 btn_type = "primary" if p == current_preset else "secondary"
                 if st.button(p, key=f"preset_{p}", use_container_width=True, type=btn_type):
                     if p == "Custom":
@@ -91,7 +90,7 @@ def render_filters():
     return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.get("selected_vendor", "All Vendors")
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (grid of cards)
+# Helper: Needs Attention Section (grid of cards using st.columns)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     # Counts for tabs
@@ -199,7 +198,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         st.info("No attention items found.")
         return
 
-    # Pagination
+    # Pagination: 8 cards per page (2 rows of 4)
     items_per_page = 8
     total_items = len(attention_df)
     total_pages = (total_items - 1) // items_per_page + 1
@@ -208,15 +207,9 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     end_idx = min(start_idx + items_per_page, total_items)
     page_df = attention_df.iloc[start_idx:end_idx]
 
-    # Custom CSS for grid cards
+    # Card styling
     st.markdown("""
     <style>
-    .attention-grid {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 1rem;
-        margin-bottom: 1rem;
-    }
     .attention-card {
         background-color: white;
         border-radius: 16px;
@@ -224,6 +217,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         border: 1px solid #e2e8f0;
         transition: transform 0.2s;
+        height: 100%;
     }
     .attention-card:hover {
         transform: translateY(-2px);
@@ -267,23 +261,15 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         color: #6b7280;
         margin-top: 6px;
     }
-    @media (max-width: 1024px) {
-        .attention-grid { grid-template-columns: repeat(2, 1fr); }
-    }
-    @media (max-width: 640px) {
-        .attention-grid { grid-template-columns: 1fr; }
-    }
     </style>
     """, unsafe_allow_html=True)
 
-    # Render grid
-    st.markdown('<div class="attention-grid">', unsafe_allow_html=True)
-    for _, row in page_df.iterrows():
+    # Helper to render a single card
+    def render_card(row):
         inv_num = clean_invoice_number(row['invoice_number'])
         amount = safe_number(row['amount'])
         vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else "Unknown"
         due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
-        # Invoice number as clickable link (ellipse pill)
         inv_link = f"?page=Invoices&search_invoice={inv_num}"
         st.markdown(f"""
             <div class="attention-card">
@@ -296,7 +282,14 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                 <div class="due-date">Due: {due_date}</div>
             </div>
         """, unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Display cards in rows of 4 using st.columns
+    for i in range(0, len(page_df), 4):
+        cols = st.columns(4)
+        for j in range(4):
+            if i + j < len(page_df):
+                with cols[j]:
+                    render_card(page_df.iloc[i + j])
 
     # Pagination controls
     col_prev, col_info, col_next = st.columns([1,2,1])
@@ -346,7 +339,6 @@ def render_charts(rng_start, rng_end, vendor_where):
     top_df = run_query(top_vendors_sql)
 
     # 3. Spend Trend Analysis: Actual (green) + Forecast (blue)
-    # Get actual monthly spend for last 12 months
     trend_sql = f"""
         SELECT
             DATE_TRUNC('month', posting_date) AS month,
@@ -359,13 +351,10 @@ def render_charts(rng_start, rng_end, vendor_where):
     trend_df = run_query(trend_sql)
     if not trend_df.empty:
         trend_df['month_str'] = pd.to_datetime(trend_df['month']).dt.strftime('%b %Y')
-        # Simple forecast: 3-month moving average as forecast
+        # Simple forecast: 3-month moving average
         trend_df['forecast_spend'] = trend_df['actual_spend'].rolling(3, min_periods=1).mean().shift(1).fillna(trend_df['actual_spend'])
-        # Prepare for Altair
         trend_melted = trend_df.melt(id_vars=['month_str'], value_vars=['actual_spend', 'forecast_spend'],
                                      var_name='type', value_name='spend')
-        trend_melted['color'] = trend_melted['type'].map({'actual_spend': '#22c55e', 'forecast_spend': '#3b82f6'})
-        # Bar chart
         spend_chart = alt.Chart(trend_melted).mark_bar().encode(
             x=alt.X('month_str:N', sort=None, title=None, axis=alt.Axis(labelAngle=-45)),
             y=alt.Y('spend:Q', title='Spend', axis=alt.Axis(format='~s')),
@@ -450,7 +439,6 @@ def render_dashboard():
     cur_pending = safe_int(cur_df.loc[0,"pending_inv"]) if not cur_df.empty else 180
     cur_avg_processing = safe_number(cur_df.loc[0,"avg_processing_days"]) if not cur_df.empty else 71.0
 
-    # Prior period query now includes avg_processing_days
     prev_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -484,7 +472,7 @@ def render_dashboard():
     avg_delta_str = f"↓ {abs(avg_delta):.1f}d" if avg_delta < 0 else f"↑ {avg_delta:.1f}d" if avg_delta > 0 else "0.0d"
     avg_up = avg_delta > 0
 
-    # First pass & auto rates (using existing queries, with fallbacks)
+    # First pass & auto rates
     first_pass_sql = f"""
         WITH hist AS (
             SELECT invoice_number,
