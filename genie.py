@@ -11,6 +11,127 @@ from utils import abbr_currency, auto_chart, alt_line_monthly, alt_bar, alt_donu
 from semantic_model import SYSTEM_PROMPT, DESCRIPTIVE_PROMPT_TEMPLATE, generate_sql
 from persistence import get_saved_insights_cached, get_frequent_questions_by_user_cached, get_frequent_questions_all_cached, save_chat_message, save_question, set_cache, get_cache
 from quick_analysis import run_quick_analysis
+from config import DATABASE
+
+# ------------------------------------------------------------
+# Cash Flow Forecast handler (for Forecast tab buttons)
+# ------------------------------------------------------------
+def process_cash_flow_forecast(question: str) -> dict:
+    """Run cash flow forecast query and return rich response."""
+    # Try the dedicated view first
+    cf_sql = f"""
+        SELECT
+            forecast_bucket,
+            invoice_count,
+            total_amount,
+            earliest_due,
+            latest_due
+        FROM {DATABASE}.cash_flow_forecast_vw
+        ORDER BY CASE forecast_bucket
+            WHEN 'TOTAL_UNPAID' THEN 0
+            WHEN 'OVERDUE_NOW' THEN 1
+            WHEN 'DUE_7_DAYS' THEN 2
+            WHEN 'DUE_14_DAYS' THEN 3
+            WHEN 'DUE_30_DAYS' THEN 4
+            WHEN 'DUE_60_DAYS' THEN 5
+            WHEN 'DUE_90_DAYS' THEN 6
+            WHEN 'BEYOND_90_DAYS' THEN 7
+            ELSE 8 END
+    """
+    cf_df = run_query(cf_sql)
+    if cf_df.empty:
+        # Fallback query (same as forecast.py)
+        cf_sql_fallback = f"""
+            WITH base AS (
+                SELECT
+                    invoice_number,
+                    invoice_amount_local,
+                    due_date,
+                    invoice_status,
+                    DATE_DIFF('day', CURRENT_DATE, due_date) AS days_until_due
+                FROM {DATABASE}.fact_all_sources_vw
+                WHERE UPPER(invoice_status) IN ('OPEN', 'DUE', 'OVERDUE')
+                  AND due_date IS NOT NULL
+            ),
+            buckets AS (
+                SELECT
+                    CASE
+                        WHEN days_until_due < 0 THEN 'OVERDUE_NOW'
+                        WHEN days_until_due <= 7 THEN 'DUE_7_DAYS'
+                        WHEN days_until_due <= 14 THEN 'DUE_14_DAYS'
+                        WHEN days_until_due <= 30 THEN 'DUE_30_DAYS'
+                        WHEN days_until_due <= 60 THEN 'DUE_60_DAYS'
+                        WHEN days_until_due <= 90 THEN 'DUE_90_DAYS'
+                        ELSE 'BEYOND_90_DAYS'
+                    END AS forecast_bucket,
+                    COUNT(*) AS invoice_count,
+                    SUM(invoice_amount_local) AS total_amount,
+                    MIN(due_date) AS earliest_due,
+                    MAX(due_date) AS latest_due
+                FROM base
+                GROUP BY 1
+            ),
+            total AS (
+                SELECT 'TOTAL_UNPAID' AS forecast_bucket,
+                       SUM(invoice_count) AS invoice_count,
+                       SUM(total_amount) AS total_amount,
+                       NULL AS earliest_due,
+                       NULL AS latest_due
+                FROM buckets
+            )
+            SELECT * FROM total
+            UNION ALL SELECT * FROM buckets
+            ORDER BY CASE forecast_bucket
+                WHEN 'TOTAL_UNPAID' THEN 0
+                WHEN 'OVERDUE_NOW' THEN 1
+                WHEN 'DUE_7_DAYS' THEN 2
+                WHEN 'DUE_14_DAYS' THEN 3
+                WHEN 'DUE_30_DAYS' THEN 4
+                WHEN 'DUE_60_DAYS' THEN 5
+                WHEN 'DUE_90_DAYS' THEN 6
+                ELSE 7 END
+        """
+        cf_df = run_query(cf_sql_fallback)
+        used_sql = cf_sql_fallback
+    else:
+        used_sql = cf_sql
+
+    if cf_df.empty:
+        return {"layout": "error", "message": "No cash flow forecast data available."}
+
+    # Convert columns to lowercase for consistency
+    cf_df.columns = [c.lower() for c in cf_df.columns]
+    # Ensure required columns exist
+    required = ['forecast_bucket', 'total_amount', 'invoice_count']
+    for col in required:
+        if col not in cf_df.columns:
+            cf_df[col] = 0
+
+    # Prepare data for insights
+    data_preview = cf_df.to_string(index=False)
+    # Generate AI insights using Bedrock
+    prompt = f"""
+You are a senior procurement analyst. Based on the following cash flow forecast data, write a response with two sections:
+
+1. **Descriptive** – What the data shows. Cite exact numbers for each bucket (TOTAL_UNPAID, OVERDUE_NOW, DUE_7_DAYS, DUE_14_DAYS, DUE_30_DAYS, DUE_60_DAYS, DUE_90_DAYS, BEYOND_90_DAYS). Explain the cash outflow expected in each period.
+2. **Prescriptive** – Specific recommended actions and risks based on the data. List 3‑5 bullet points. Each bullet must include a specific finding, a concrete action, and a brief 'Why it matters'.
+
+Data:
+{data_preview}
+
+Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
+"""
+    analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst focusing on cash flow management.")
+    if not analyst_text:
+        analyst_text = "Unable to generate insights at this time."
+
+    return {
+        "layout": "cash_flow",
+        "df": cf_df.to_dict(orient="records"),
+        "sql": used_sql,
+        "analyst_response": analyst_text,
+        "question": question
+    }
 
 def process_custom_query(query: str) -> dict:
     sql, _ = generate_sql(query)
@@ -30,6 +151,46 @@ def process_custom_query(query: str) -> dict:
         "question": query,
         "analyst_response": analyst_text
     }
+
+def render_cash_flow_response(result: dict):
+    """Render cash flow forecast response with metrics, chart, table, and insights."""
+    df = pd.DataFrame(result["df"])
+    if df.empty:
+        st.error("No cash flow data to display.")
+        return
+
+    # Metrics: total unpaid, overdue now, due next 30 days
+    total_unpaid = df[df["forecast_bucket"] == "TOTAL_UNPAID"]["total_amount"].values[0] if not df[df["forecast_bucket"] == "TOTAL_UNPAID"].empty else 0
+    overdue_now = df[df["forecast_bucket"] == "OVERDUE_NOW"]["total_amount"].values[0] if not df[df["forecast_bucket"] == "OVERDUE_NOW"].empty else 0
+    due_30 = df[df["forecast_bucket"].isin(["DUE_7_DAYS","DUE_14_DAYS","DUE_30_DAYS"])]["total_amount"].sum()
+    pct_due_30 = (due_30 / total_unpaid * 100) if total_unpaid > 0 else 0
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Unpaid", abbr_currency(total_unpaid))
+    with col2:
+        st.metric("Overdue Now", abbr_currency(overdue_now))
+    with col3:
+        st.metric("Due Next 30 Days", f"{abbr_currency(due_30)} ({pct_due_30:.0f}%)")
+
+    # Bar chart of total_amount per bucket (exclude TOTAL_UNPAID for clarity)
+    chart_df = df[df["forecast_bucket"] != "TOTAL_UNPAID"].copy()
+    if not chart_df.empty:
+        st.subheader("Cash Outflow by Time Bucket")
+        alt_bar(chart_df, x="forecast_bucket", y="total_amount", horizontal=True, height=300, color="#3b82f6")
+
+    # Show data table
+    st.subheader("Forecast Details")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # AI insights
+    if result.get("analyst_response"):
+        st.markdown("### 💡 Key Insights")
+        st.markdown(result["analyst_response"])
+
+    # Expandable SQL
+    with st.expander("View SQL used"):
+        st.code(result["sql"], language="sql")
 
 def render_quick_analysis_response(result: dict):
     """Render rich, type‑specific response with colorful styling."""
@@ -131,7 +292,6 @@ def render_quick_analysis_response(result: dict):
                 if "LATE_PAYMENTS" in monthly_df.columns and "TOTAL_PAYMENTS" in monthly_df.columns:
                     monthly_df["LATE_PCT"] = (monthly_df["LATE_PAYMENTS"] / monthly_df["TOTAL_PAYMENTS"]) * 100
                     late_df = monthly_df[["MONTH_STR", "LATE_PCT"]].rename(columns={"LATE_PCT": "VALUE"})
-                    # Removed unsupported 'color' argument
                     alt_line_monthly(late_df, month_col="MONTH_STR", value_col="VALUE", height=250, title="Late Payments (%)")
 
     elif analysis_type == "invoice_aging":
@@ -144,7 +304,7 @@ def render_quick_analysis_response(result: dict):
                 st.markdown("### 🥧 Aging Distribution")
                 alt_donut_status(vendors_df, label_col="AGING_BUCKET", value_col="CNT", title="Invoice Count by Age", height=300)
 
-    # Prescriptive Insights (AI‑generated)
+    # Prescriptive Insights (AI‑generated) for quick analyses
     if "analyst_response" not in result or not result["analyst_response"]:
         monthly_preview = ""
         if monthly_df is not None:
@@ -195,11 +355,13 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
         elif "sql" in result and isinstance(result["sql"], str):
             st.code(result["sql"], language="sql")
 
+# ------------------------------------------------------------
+# Main Genie render function
+# ------------------------------------------------------------
 def render_genie():
     # Enhanced global CSS for Genie tab
     st.markdown("""
     <style>
-    /* Genie cards */
     .genie-card {
         background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
         border-radius: 20px;
@@ -231,7 +393,6 @@ def render_genie():
         line-height: 1.5;
         margin-bottom: 1.5rem;
     }
-    /* Chat message bubbles */
     .chat-message-user {
         background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
         color: white;
@@ -259,7 +420,6 @@ def render_genie():
         margin-bottom: 1rem;
         scroll-behavior: smooth;
     }
-    /* Suggestions chips */
     .suggestion-chip {
         background: #f1f5f9;
         border-radius: 40px;
@@ -275,17 +435,6 @@ def render_genie():
         background: #3b82f6;
         color: white;
         border-color: #3b82f6;
-    }
-    /* Metrics card inside Genie */
-    .metric-card {
-        border-radius: 16px;
-        padding: 12px;
-        text-align: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-        transition: transform 0.2s;
-    }
-    .metric-card:hover {
-        transform: translateY(-2px);
     }
     </style>
     """, unsafe_allow_html=True)
@@ -304,6 +453,14 @@ def render_genie():
     if "genie_prefill" not in st.session_state:
         st.session_state.genie_prefill = ""
 
+    # List of cash flow forecast questions (from Forecast tab buttons)
+    cash_flow_questions = [
+        "Forecast cash outflow for the next 7, 14, 30, 60, and 90 days",
+        "Which invoices should we pay early to capture discounts?",
+        "What is the optimal payment timing strategy for this week?",
+        "Show late payment trend for forecasting"
+    ]
+
     quick_map = {
         "Spending Overview": "spending_overview",
         "Vendor Analysis": "vendor_analysis",
@@ -318,13 +475,16 @@ def render_genie():
         st.session_state.selected_analysis = "custom"
         st.session_state.last_custom_query = auto_query
         with st.spinner("Running analysis..."):
-            if auto_query in quick_map:
+            # Check if it's a cash flow forecast question
+            if any(q in auto_query for q in cash_flow_questions):
+                result = process_cash_flow_forecast(auto_query)
+            elif auto_query in quick_map:
                 result = run_quick_analysis(quick_map[auto_query])
             else:
                 result = process_custom_query(auto_query)
             st.session_state.genie_response = result
             st.session_state.genie_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
-            if result.get("layout") in ("quick", "analyst", "sql"):
+            if result.get("layout") in ("quick", "analyst", "sql", "cash_flow"):
                 st.session_state.genie_messages.append({"role": "assistant", "content": "Analysis complete.", "response": result, "timestamp": datetime.now()})
                 save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", auto_query)
                 st.session_state.genie_turn_index += 1
@@ -333,7 +493,7 @@ def render_genie():
                     sql_used_val = json.dumps(sql_used_val)
                 save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", sql_used=sql_used_val)
                 st.session_state.genie_turn_index += 1
-                save_question(auto_query, "quick" if auto_query in quick_map else "custom")
+                save_question(auto_query, "cash_flow" if any(q in auto_query for q in cash_flow_questions) else ("quick" if auto_query in quick_map else "custom"))
                 set_cache(auto_query, result)
             else:
                 st.session_state.genie_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
@@ -425,7 +585,9 @@ def render_genie():
                 st.markdown(f'<div class="chat-message-assistant"><strong>🧞 Genie</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
                 if "response" in msg and msg["response"]:
                     resp = msg["response"]
-                    if resp.get("layout") == "quick":
+                    if resp.get("layout") == "cash_flow":
+                        render_cash_flow_response(resp)
+                    elif resp.get("layout") == "quick":
                         render_quick_analysis_response(resp)
                     elif resp.get("layout") == "analyst":
                         analyst_text = resp.get("analyst_response", "")
@@ -479,11 +641,13 @@ def render_genie():
                         st.session_state.genie_turn_index += 1
                         save_question(user_question, "custom")
                     else:
-                        if user_question in quick_map:
+                        if any(q in user_question for q in cash_flow_questions):
+                            result = process_cash_flow_forecast(user_question)
+                        elif user_question in quick_map:
                             result = run_quick_analysis(quick_map[user_question])
                         else:
                             result = process_custom_query(user_question)
-                        if result.get("layout") in ("quick", "analyst", "sql"):
+                        if result.get("layout") in ("quick", "analyst", "sql", "cash_flow"):
                             set_cache(user_question, result)
                             st.session_state.genie_response = result
                             st.session_state.genie_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
@@ -495,7 +659,7 @@ def render_genie():
                                 sql_used_val = json.dumps(sql_used_val)
                             save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", sql_used=sql_used_val)
                             st.session_state.genie_turn_index += 1
-                            save_question(user_question, "quick" if user_question in quick_map else "custom")
+                            save_question(user_question, "cash_flow" if any(q in user_question for q in cash_flow_questions) else ("quick" if user_question in quick_map else "custom"))
                         else:
                             st.error(result.get("message", "Query failed"))
                 st.rerun()
