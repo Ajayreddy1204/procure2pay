@@ -85,7 +85,7 @@ def render_filters():
     return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.selected_vendor
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (pill tabs, redesigned cards)
+# Helper: Needs Attention Section (pill tabs, clickable invoice pill)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     # Session state for tabs and pagination
@@ -138,7 +138,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         attention_sql = f"""
             SELECT
                 f.invoice_number,
-                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -157,7 +156,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         attention_sql = f"""
             SELECT
                 f.invoice_number,
-                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -175,7 +173,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         attention_sql = f"""
             SELECT
                 f.invoice_number,
-                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -197,17 +194,20 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     # Fallback sample data if query returns empty
     if attention_df.empty:
         sample_data = [
-            {"invoice_number": "90064", "sub_id": "59", "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
-            {"invoice_number": "90053", "sub_id": "89", "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
-            {"invoice_number": "90064", "sub_id": "18", "amount": 1600, "vendor_name": "Emerson Electric", "due_date": "2026-02-19"},
-            {"invoice_number": "90046", "sub_id": "07", "amount": 2200, "vendor_name": "McMaster-Carr", "due_date": "2026-02-19"},
-            {"invoice_number": "90056", "sub_id": "77", "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
-            {"invoice_number": "90074", "sub_id": "88", "amount": 15400, "vendor_name": "MSC Industrial", "due_date": "2026-02-19"},
-            {"invoice_number": "90082", "sub_id": "70", "amount": 13400, "vendor_name": "Sonepar USA", "due_date": "2026-02-23"},
-            {"invoice_number": "90007", "sub_id": "38", "amount": 2800, "vendor_name": "Emerson Electric", "due_date": "2026-02-25"}
+            {"invoice_number": 90064, "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
+            {"invoice_number": 90053, "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
+            {"invoice_number": 90064, "amount": 1600, "vendor_name": "Emerson Electric", "due_date": "2026-02-19"},
+            {"invoice_number": 90046, "amount": 2200, "vendor_name": "McMaster-Carr", "due_date": "2026-02-19"},
+            {"invoice_number": 90056, "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
+            {"invoice_number": 90074, "amount": 15400, "vendor_name": "MSC Industrial", "due_date": "2026-02-19"},
+            {"invoice_number": 90082, "amount": 13400, "vendor_name": "Sonepar USA", "due_date": "2026-02-23"},
+            {"invoice_number": 90007, "amount": 2800, "vendor_name": "Emerson Electric", "due_date": "2026-02-25"}
         ]
         attention_df = pd.DataFrame(sample_data)
         attention_df['due_date'] = pd.to_datetime(attention_df['due_date'])
+    else:
+        # Clean invoice numbers: remove decimal and convert to int string
+        attention_df['invoice_number'] = attention_df['invoice_number'].apply(lambda x: str(int(float(x))) if pd.notna(x) else str(x))
 
     # Pagination: 8 cards per page
     items_per_page = 8
@@ -242,29 +242,22 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         transform: translateY(-3px);
         box-shadow: 0 8px 20px rgba(0,0,0,0.1);
     }
-    /* Circular badge */
-    .circular-badge {
-        background-color: #f3f4f6;
-        border-radius: 50%;
-        width: 65px;
-        height: 65px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-        font-weight: bold;
-        box-shadow: inset 0 0 0 1px #e5e7eb;
+    /* Style the button (invoice pill) inside the card */
+    .attention-card .stButton button {
+        background-color: #3b82f6 !important;
+        color: white !important;
+        border-radius: 9999px !important;
+        padding: 4px 12px !important;
+        font-size: 0.9rem !important;
+        font-weight: 600 !important;
+        border: none !important;
+        margin-bottom: 8px !important;
+        width: auto !important;
+        display: inline-block !important;
+        line-height: 1.2 !important;
     }
-    .invoice-num {
-        font-size: 1.1rem;
-        font-weight: 800;
-        color: #1f2937;
-    }
-    .small-num {
-        font-size: 0.7rem;
-        color: #6b7280;
-        margin-top: -2px;
+    .attention-card .stButton button:hover {
+        background-color: #2563eb !important;
     }
     /* Status label */
     .status-label {
@@ -298,24 +291,22 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
 
     def render_card(row):
         inv_num = str(row['invoice_number'])
-        sub_id = str(row['sub_id']) if pd.notna(row['sub_id']) else ""
         amount = safe_number(row['amount'])
         vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else "Unknown"
         due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
 
+        # Use a Streamlit button for the invoice number pill
+        if st.button(inv_num, key=f"inv_pill_{inv_num}", help="View invoice details", use_container_width=False):
+            st.session_state.selected_invoice = inv_num
+            st.session_state.page = "Invoices"
+            st.rerun()
+
+        # Rest of the card content
         st.markdown(f"""
-        <div class="attention-card">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                <div class="circular-badge">
-                    <div class="invoice-num">{inv_num}</div>
-                    <div class="small-num">{sub_id}</div>
-                </div>
-                <div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>
-            </div>
+            <div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>
             <div class="card-amount">{abbr_currency(amount)}</div>
             <div class="vendor-name">{vendor}</div>
             <div class="due-date">Due: {due_date}</div>
-        </div>
         """, unsafe_allow_html=True)
 
     # Display cards in rows of 4
@@ -324,7 +315,10 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         for j in range(4):
             if i + j < len(page_df):
                 with cols[j]:
-                    render_card(page_df.iloc[i + j])
+                    with st.container():
+                        st.markdown('<div class="attention-card">', unsafe_allow_html=True)
+                        render_card(page_df.iloc[i + j])
+                        st.markdown('</div>', unsafe_allow_html=True)
 
     # Pagination controls
     col_prev, col_info, col_next = st.columns([1,2,1])
