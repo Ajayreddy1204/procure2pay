@@ -122,10 +122,9 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     }
 
 # ------------------------------------------------------------
-# Early Payment Candidates handler (fixed)
+# Early Payment Candidates handler
 # ------------------------------------------------------------
 def process_early_payment(question: str) -> dict:
-    # Try dedicated view first
     ep_sql = f"""
         SELECT
             document_number,
@@ -143,7 +142,6 @@ def process_early_payment(question: str) -> dict:
     ep_df = run_query(ep_sql)
     used_sql = ep_sql
     if ep_df.empty:
-        # Fallback: compute from fact table
         ep_sql_fallback = f"""
             SELECT
                 CAST(f.invoice_number AS VARCHAR) AS document_number,
@@ -166,13 +164,11 @@ def process_early_payment(question: str) -> dict:
         ep_df = run_query(ep_sql_fallback)
         used_sql = ep_sql_fallback
 
-    # Normalize column names
     if not ep_df.empty:
         ep_df.columns = [c.lower() for c in ep_df.columns]
     else:
         ep_df = pd.DataFrame()
 
-    # Generate AI insights (even if no data)
     if ep_df.empty:
         prompt = f"""
 You are a senior procurement analyst. The user asked: "{question}".
@@ -318,6 +314,187 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     }
 
 # ------------------------------------------------------------
+# GR/IR Clearing Playbook handlers
+# ------------------------------------------------------------
+def process_grir_hotspots(question: str) -> dict:
+    """Identify top GR/IR hotspots by month"""
+    sql = f"""
+        SELECT
+            year,
+            month,
+            invoice_count,
+            total_grir_blnc AS total_grir_balance
+        FROM {DATABASE}.gr_ir_outstanding_balance_vw
+        ORDER BY year DESC, month DESC
+    """
+    df = run_query(sql)
+    if df.empty:
+        return {"layout": "error", "message": "No GR/IR outstanding balance data found."}
+    df.columns = [c.lower() for c in df.columns]
+    # Calculate rank
+    df['balance_rank'] = df['total_grir_balance'].rank(ascending=False, method='dense').astype(int)
+    data_preview = df.head(12).to_string(index=False)
+    prompt = f"""
+You are a senior procurement analyst. Based on the following GR/IR outstanding balance by month, write a response with two sections:
+
+1. **Descriptive** – Highlight the months with the highest GR/IR balances (top 3). Mention the total balance and invoice count for those months.
+2. **Prescriptive** – Recommend which months to prioritize for clearing, and suggest concrete steps (e.g., review POs with missing receipts, contact vendors for missing invoices). List 3‑5 bullet points with specific findings, actions, and why it matters.
+
+Data (most recent months):
+{data_preview}
+
+Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
+"""
+    analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst focusing on GR/IR reconciliation.")
+    if not analyst_text:
+        analyst_text = "Unable to generate insights at this time."
+    return {
+        "layout": "grir_hotspots",
+        "df": df.to_dict(orient="records"),
+        "sql": sql,
+        "analyst_response": analyst_text,
+        "question": question
+    }
+
+def process_grir_root_causes(question: str) -> dict:
+    """Explain likely root causes and remediation actions"""
+    # We'll use aging data to infer root causes
+    aging_sql = f"""
+        SELECT
+            year,
+            month,
+            pct_grir_over_60,
+            cnt_grir_over_60
+        FROM {DATABASE}.gr_ir_aging_vw
+        ORDER BY year DESC, month DESC
+        LIMIT 6
+    """
+    aging_df = run_query(aging_sql)
+    balance_sql = f"""
+        SELECT
+            year,
+            month,
+            total_grir_blnc
+        FROM {DATABASE}.gr_ir_outstanding_balance_vw
+        ORDER BY year DESC, month DESC
+        LIMIT 6
+    """
+    balance_df = run_query(balance_sql)
+    if aging_df.empty and balance_df.empty:
+        return {"layout": "error", "message": "No GR/IR aging or balance data found."}
+    # Combine for context
+    context = "GR/IR aging (last 6 months):\n" + aging_df.to_string(index=False) + "\n\nOutstanding balances:\n" + balance_df.to_string(index=False)
+    prompt = f"""
+You are a senior procurement analyst. Based on the following GR/IR data (aging and outstanding balances), write a response with two sections:
+
+1. **Descriptive** – Explain the likely root‑cause buckets for GR/IR discrepancies: missing goods receipt, invoice not posted, price/quantity mismatch, etc. Use the data to infer which buckets are most likely.
+2. **Prescriptive** – For each root‑cause bucket, suggest 2‑3 concrete remediation actions. Focus on actionable steps like matching POs to receipts, following up with vendors, etc. List as bullet points.
+
+Data:
+{context}
+
+Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
+"""
+    analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst specializing in GR/IR reconciliation.")
+    if not analyst_text:
+        analyst_text = "Unable to generate insights at this time."
+    return {
+        "layout": "grir_root_causes",
+        "df": aging_df.to_dict(orient="records") if not aging_df.empty else [],
+        "extra_df": balance_df.to_dict(orient="records") if not balance_df.empty else [],
+        "sql": f"{aging_sql}\n\n{balance_sql}",
+        "analyst_response": analyst_text,
+        "question": question
+    }
+
+def process_grir_working_capital(question: str) -> dict:
+    """Quantify working capital benefit from clearing old GR/IR"""
+    sql = f"""
+        SELECT
+            year,
+            month,
+            total_grir_blnc,
+            CASE WHEN (year * 100 + month) <= (EXTRACT(YEAR FROM CURRENT_DATE) * 100 + EXTRACT(MONTH FROM CURRENT_DATE) - 60)
+                 THEN total_grir_blnc ELSE 0 END AS older_than_60_days,
+            CASE WHEN (year * 100 + month) <= (EXTRACT(YEAR FROM CURRENT_DATE) * 100 + EXTRACT(MONTH FROM CURRENT_DATE) - 90)
+                 THEN total_grir_blnc ELSE 0 END AS older_than_90_days
+        FROM {DATABASE}.gr_ir_outstanding_balance_vw
+        ORDER BY year DESC, month DESC
+    """
+    df = run_query(sql)
+    if df.empty:
+        return {"layout": "error", "message": "No GR/IR balance data found."}
+    df.columns = [c.lower() for c in df.columns]
+    total_old_60 = df['older_than_60_days'].sum()
+    total_old_90 = df['older_than_90_days'].sum()
+    data_preview = df.head(12).to_string(index=False)
+    prompt = f"""
+You are a senior procurement analyst. Based on the following GR/IR outstanding balance by month, with estimated amounts older than 60 and 90 days, write a response with two sections:
+
+1. **Descriptive** – State the total working capital that could be released by clearing GR/IR items older than 60 days (${total_old_60:,.2f}) and older than 90 days (${total_old_90:,.2f}). Mention which months contribute most.
+2. **Prescriptive** – Recommend a phased approach to clear old items, prioritising those >90 days first. Suggest how to use this released working capital (e.g., pay down debt, early payment discounts). List 3‑5 bullet points with specific findings, actions, and why it matters.
+
+Data:
+{data_preview}
+
+Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
+"""
+    analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst focusing on working capital.")
+    if not analyst_text:
+        analyst_text = "Unable to generate insights at this time."
+    return {
+        "layout": "grir_working_capital",
+        "df": df.to_dict(orient="records"),
+        "metrics": {"older_60": total_old_60, "older_90": total_old_90},
+        "sql": sql,
+        "analyst_response": analyst_text,
+        "question": question
+    }
+
+def process_grir_vendor_followup(question: str) -> dict:
+    """Draft vendor follow-up messages for top GR/IR items"""
+    # Get top GR/IR items by vendor (using fact table or view)
+    sql = f"""
+        SELECT
+            v.vendor_name,
+            COUNT(*) AS grir_count,
+            SUM(f.invoice_amount_local) AS total_amount,
+            AVG(DATE_DIFF('day', f.posting_date, CURRENT_DATE)) AS avg_age_days
+        FROM {DATABASE}.fact_all_sources_vw f
+        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+        WHERE f.invoice_status = 'OPEN' AND f.purchase_order_reference IS NOT NULL
+        GROUP BY v.vendor_name
+        ORDER BY total_amount DESC
+        LIMIT 10
+    """
+    df = run_query(sql)
+    if df.empty:
+        return {"layout": "error", "message": "No GR/IR vendor data found."}
+    df.columns = [c.lower() for c in df.columns]
+    data_preview = df.to_string(index=False)
+    prompt = f"""
+You are a senior procurement analyst. Based on the following top vendors with outstanding GR/IR items (count, total amount, average age), draft vendor-facing follow-up templates. Write a response with two sections:
+
+1. **Descriptive** – Summarise the top vendors and the scale of GR/IR items.
+2. **Prescriptive** – Provide 3‑5 template messages (subject line and bullet points) that can be used to follow up with these vendors. Each template should be realistic and concise, tailored to the likely root cause (e.g., missing invoice, goods receipt not posted). Also include a recommended escalation timeline.
+
+Data:
+{data_preview}
+
+Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
+"""
+    analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst skilled in vendor communication.")
+    if not analyst_text:
+        analyst_text = "Unable to generate insights at this time."
+    return {
+        "layout": "grir_vendor_followup",
+        "df": df.to_dict(orient="records"),
+        "sql": sql,
+        "analyst_response": analyst_text,
+        "question": question
+    }
+
+# ------------------------------------------------------------
 # Generic custom query processor
 # ------------------------------------------------------------
 def process_custom_query(query: str) -> dict:
@@ -420,6 +597,66 @@ def render_late_payment_trend_response(result: dict):
             alt_line_monthly(days_df, month_col="month_str", value_col="VALUE", height=300, title="Avg Days Late")
     st.subheader("Payment Performance Data")
     st.dataframe(df, use_container_width=True, hide_index=True)
+    if result.get("analyst_response"):
+        st.markdown("### 💡 Key Insights")
+        st.markdown(result["analyst_response"])
+    with st.expander("View SQL used"):
+        st.code(result["sql"], language="sql")
+
+def render_grir_hotspots(result: dict):
+    df = pd.DataFrame(result["df"])
+    if df.empty:
+        st.error("No GR/IR data.")
+        return
+    st.subheader("GR/IR Outstanding Balance by Month")
+    # Bar chart
+    chart_df = df.head(12).copy()
+    chart_df['year_month'] = chart_df['year'].astype(str) + '-' + chart_df['month'].astype(str).str.zfill(2)
+    alt_bar(chart_df, x="year_month", y="total_grir_balance", title="Top months with highest GR/IR", horizontal=False, height=300, color="#ef4444")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    if result.get("analyst_response"):
+        st.markdown("### 💡 Key Insights")
+        st.markdown(result["analyst_response"])
+    with st.expander("View SQL used"):
+        st.code(result["sql"], language="sql")
+
+def render_grir_root_causes(result: dict):
+    df = pd.DataFrame(result.get("df", []))
+    extra_df = pd.DataFrame(result.get("extra_df", []))
+    if not df.empty:
+        st.subheader("GR/IR Aging (Last 6 Months)")
+        st.dataframe(df, use_container_width=True)
+    if not extra_df.empty:
+        st.subheader("Outstanding Balances (Last 6 Months)")
+        st.dataframe(extra_df, use_container_width=True)
+    if result.get("analyst_response"):
+        st.markdown("### 💡 Key Insights")
+        st.markdown(result["analyst_response"])
+    with st.expander("View SQL used"):
+        st.code(result["sql"], language="sql")
+
+def render_grir_working_capital(result: dict):
+    metrics = result.get("metrics", {})
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Working Capital Release (>60 days)", abbr_currency(metrics.get("older_60", 0)))
+    with col2:
+        st.metric("Working Capital Release (>90 days)", abbr_currency(metrics.get("older_90", 0)))
+    df = pd.DataFrame(result["df"])
+    if not df.empty:
+        st.subheader("GR/IR Balance by Month (with aging estimates)")
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    if result.get("analyst_response"):
+        st.markdown("### 💡 Key Insights")
+        st.markdown(result["analyst_response"])
+    with st.expander("View SQL used"):
+        st.code(result["sql"], language="sql")
+
+def render_grir_vendor_followup(result: dict):
+    df = pd.DataFrame(result["df"])
+    if not df.empty:
+        st.subheader("Top Vendors with Outstanding GR/IR Items")
+        st.dataframe(df, use_container_width=True, hide_index=True)
     if result.get("analyst_response"):
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
@@ -587,14 +824,31 @@ def render_genie():
         st.session_state.last_custom_query = auto_query
         with st.spinner("Running analysis..."):
             lower_q = auto_query.lower()
+            # Cash flow
             if any(kw in lower_q for kw in ["forecast cash outflow", "cash flow forecast", "7, 14, 30, 60, 90"]):
                 result = process_cash_flow_forecast(auto_query)
+            # Early payment
             elif any(kw in lower_q for kw in ["pay early", "capture discounts", "early payment"]):
                 result = process_early_payment(auto_query)
+            # Payment timing
             elif any(kw in lower_q for kw in ["optimal payment timing", "payment timing strategy"]):
                 result = process_payment_timing(auto_query)
+            # Late payment trend
             elif any(kw in lower_q for kw in ["late payment trend", "late payment risk"]):
                 result = process_late_payment_trend(auto_query)
+            # GR/IR Hotspots
+            elif "gr/ir outstanding balance by month" in lower_q or "hotspots" in lower_q:
+                result = process_grir_hotspots(auto_query)
+            # GR/IR Root causes
+            elif "root-cause" in lower_q or "root causes" in lower_q or "explain likely gr/ir" in lower_q:
+                result = process_grir_root_causes(auto_query)
+            # GR/IR Working capital
+            elif "working-capital" in lower_q or "working capital" in lower_q or "older than 60" in lower_q:
+                result = process_grir_working_capital(auto_query)
+            # GR/IR Vendor follow-up
+            elif "vendor follow-up" in lower_q or "draft vendor" in lower_q or "follow-up messages" in lower_q:
+                result = process_grir_vendor_followup(auto_query)
+            # Quick analyses
             elif auto_query in quick_map:
                 result = run_quick_analysis(quick_map[auto_query])
             else:
@@ -702,6 +956,14 @@ def render_genie():
                         render_payment_timing_response(resp)
                     elif layout == "late_payment_trend":
                         render_late_payment_trend_response(resp)
+                    elif layout == "grir_hotspots":
+                        render_grir_hotspots(resp)
+                    elif layout == "grir_root_causes":
+                        render_grir_root_causes(resp)
+                    elif layout == "grir_working_capital":
+                        render_grir_working_capital(resp)
+                    elif layout == "grir_vendor_followup":
+                        render_grir_vendor_followup(resp)
                     elif layout == "quick":
                         render_quick_analysis_response(resp)
                     elif layout == "analyst":
@@ -764,6 +1026,14 @@ def render_genie():
                             result = process_payment_timing(user_question)
                         elif any(kw in lower_q for kw in ["late payment trend", "late payment risk"]):
                             result = process_late_payment_trend(user_question)
+                        elif "gr/ir outstanding balance by month" in lower_q or "hotspots" in lower_q:
+                            result = process_grir_hotspots(user_question)
+                        elif "root-cause" in lower_q or "root causes" in lower_q or "explain likely gr/ir" in lower_q:
+                            result = process_grir_root_causes(user_question)
+                        elif "working-capital" in lower_q or "working capital" in lower_q or "older than 60" in lower_q:
+                            result = process_grir_working_capital(user_question)
+                        elif "vendor follow-up" in lower_q or "draft vendor" in lower_q or "follow-up messages" in lower_q:
+                            result = process_grir_vendor_followup(user_question)
                         elif user_question in quick_map:
                             result = run_quick_analysis(quick_map[user_question])
                         else:
