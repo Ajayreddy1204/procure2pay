@@ -122,9 +122,10 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     }
 
 # ------------------------------------------------------------
-# Early Payment Candidates handler
+# Early Payment Candidates handler (fixed)
 # ------------------------------------------------------------
 def process_early_payment(question: str) -> dict:
+    # Try dedicated view first
     ep_sql = f"""
         SELECT
             document_number,
@@ -140,7 +141,9 @@ def process_early_payment(question: str) -> dict:
         LIMIT 20
     """
     ep_df = run_query(ep_sql)
+    used_sql = ep_sql
     if ep_df.empty:
+        # Fallback: compute from fact table
         ep_sql_fallback = f"""
             SELECT
                 CAST(f.invoice_number AS VARCHAR) AS document_number,
@@ -162,15 +165,31 @@ def process_early_payment(question: str) -> dict:
         """
         ep_df = run_query(ep_sql_fallback)
         used_sql = ep_sql_fallback
+
+    # Normalize column names
+    if not ep_df.empty:
+        ep_df.columns = [c.lower() for c in ep_df.columns]
     else:
-        used_sql = ep_sql
+        ep_df = pd.DataFrame()
 
+    # Generate AI insights (even if no data)
     if ep_df.empty:
-        return {"layout": "error", "message": "No early payment candidates found."}
+        prompt = f"""
+You are a senior procurement analyst. The user asked: "{question}".
+However, the query returned no data. Possible reasons: no open invoices with due dates in the next 30 days, or the early_payment_candidates view is empty.
+Write a response with two sections:
 
-    ep_df.columns = [c.lower() for c in ep_df.columns]
-    data_preview = ep_df.head(10).to_string(index=False)
-    prompt = f"""
+1. **Descriptive** – Explain that no invoices were found that meet the early payment criteria (due within 30 days and still open). Suggest that the user may have already captured available discounts or that all invoices are either paid or outside the window.
+2. **Prescriptive** – Provide general best practices for identifying early payment opportunities: regularly review open invoices, focus on those with due dates within 7-14 days, calculate potential savings using a 2% discount rate, and prioritize high-value invoices. List 3‑5 bullet points with actionable steps.
+
+Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
+"""
+        analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst.")
+        if not analyst_text:
+            analyst_text = "No early payment candidates were found. Please check that there are open invoices with due dates within the next 30 days."
+    else:
+        data_preview = ep_df.head(10).to_string(index=False)
+        prompt = f"""
 You are a senior procurement analyst. Based on the following list of invoices that are candidates for early payment (to capture discounts), write a response with two sections:
 
 1. **Descriptive** – Summarize the total potential savings, the number of high‑priority invoices, and the range of due dates. Highlight the top 2‑3 invoices with the largest savings.
@@ -181,16 +200,17 @@ Data (top 10 rows):
 
 Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
 """
-    analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst specializing in working capital optimization.")
-    if not analyst_text:
-        analyst_text = "Unable to generate insights at this time."
+        analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst specializing in working capital optimization.")
+        if not analyst_text:
+            analyst_text = "Unable to generate insights at this time."
 
     return {
         "layout": "early_payment",
-        "df": ep_df.to_dict(orient="records"),
+        "df": ep_df.to_dict(orient="records") if not ep_df.empty else [],
         "sql": used_sql,
         "analyst_response": analyst_text,
-        "question": question
+        "question": question,
+        "empty": ep_df.empty
     }
 
 # ------------------------------------------------------------
@@ -352,18 +372,19 @@ def render_cash_flow_response(result: dict):
 
 def render_early_payment_response(result: dict):
     df = pd.DataFrame(result["df"])
-    if df.empty:
-        st.error("No early payment candidates.")
-        return
-    total_savings = df["savings_if_2pct_discount"].sum()
-    high_priority = df[df["early_pay_priority"] == "High"].shape[0]
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Total Potential Savings", abbr_currency(total_savings))
-    with col2:
-        st.metric("High‑Priority Invoices", high_priority)
-    st.subheader("Top Candidates for Early Payment")
-    st.dataframe(df.head(10), use_container_width=True, hide_index=True)
+    empty = result.get("empty", False)
+    if empty or df.empty:
+        st.info("No early payment candidates were found in the current data. The SQL query returned zero rows.")
+    else:
+        total_savings = df["savings_if_2pct_discount"].sum()
+        high_priority = df[df["early_pay_priority"] == "High"].shape[0]
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Potential Savings", abbr_currency(total_savings))
+        with col2:
+            st.metric("High‑Priority Invoices", high_priority)
+        st.subheader("Top Candidates for Early Payment")
+        st.dataframe(df.head(10), use_container_width=True, hide_index=True)
     if result.get("analyst_response"):
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
@@ -557,7 +578,7 @@ def render_genie():
         "Invoice Aging": "invoice_aging"
     }
 
-    # --- Process auto-run query if present ---
+    # Process auto-run query from session state
     auto_query = st.session_state.pop("auto_run_query", None)
     if auto_query:
         st.session_state.genie_messages = []
@@ -580,7 +601,7 @@ def render_genie():
                 result = process_custom_query(auto_query)
             st.session_state.genie_response = result
             st.session_state.genie_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
-            if result.get("layout") in ("quick", "analyst", "sql", "cash_flow", "early_payment", "payment_timing", "late_payment_trend"):
+            if result.get("layout") not in ("error",):
                 st.session_state.genie_messages.append({"role": "assistant", "content": "Analysis complete.", "response": result, "timestamp": datetime.now()})
                 save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", auto_query)
                 st.session_state.genie_turn_index += 1
@@ -595,7 +616,7 @@ def render_genie():
                 st.session_state.genie_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
         st.rerun()
 
-    # --- UI: Welcome and quick cards ---
+    # UI: Welcome and quick analysis cards
     st.markdown("## 🧞 Welcome to ProcureIQ Genie")
     st.markdown("Your AI‑powered procurement assistant. Choose a quick analysis or ask a custom question.")
 
