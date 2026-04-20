@@ -191,7 +191,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
 
     attention_df = run_query(attention_sql)
 
-    # Fallback sample data if query returns empty
+    # If no data, use sample data (with integer invoice numbers)
     if attention_df.empty:
         sample_data = [
             {"invoice_number": 90064, "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
@@ -206,8 +206,10 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         attention_df = pd.DataFrame(sample_data)
         attention_df['due_date'] = pd.to_datetime(attention_df['due_date'])
     else:
-        # Clean invoice numbers: remove decimal and convert to int string
-        attention_df['invoice_number'] = attention_df['invoice_number'].apply(lambda x: str(int(float(x))) if pd.notna(x) else str(x))
+        # Convert invoice_number to integer (remove .0)
+        attention_df['invoice_number'] = attention_df['invoice_number'].apply(
+            lambda x: int(float(x)) if pd.notna(x) else 0
+        )
 
     # Pagination: 8 cards per page
     items_per_page = 8
@@ -242,22 +244,23 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         transform: translateY(-3px);
         box-shadow: 0 8px 20px rgba(0,0,0,0.1);
     }
-    /* Style the button (invoice pill) inside the card */
-    .attention-card .stButton button {
-        background-color: #3b82f6 !important;
-        color: white !important;
-        border-radius: 9999px !important;
-        padding: 4px 12px !important;
-        font-size: 0.9rem !important;
-        font-weight: 600 !important;
-        border: none !important;
-        margin-bottom: 8px !important;
-        width: auto !important;
-        display: inline-block !important;
-        line-height: 1.2 !important;
+    /* Pill button for invoice number */
+    .invoice-pill {
+        background-color: #3b82f6;
+        color: white;
+        border-radius: 9999px;
+        padding: 6px 12px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        text-align: center;
+        display: inline-block;
+        margin-bottom: 8px;
+        cursor: pointer;
+        border: none;
+        width: auto;
     }
-    .attention-card .stButton button:hover {
-        background-color: #2563eb !important;
+    .invoice-pill:hover {
+        background-color: #2563eb;
     }
     /* Status label */
     .status-label {
@@ -266,6 +269,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         padding: 2px 8px;
         border-radius: 20px;
         display: inline-block;
+        margin-left: auto;
     }
     /* Amount */
     .card-amount {
@@ -290,24 +294,28 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     """, unsafe_allow_html=True)
 
     def render_card(row):
-        inv_num = str(row['invoice_number'])
+        inv_num = int(row['invoice_number'])  # already integer
         amount = safe_number(row['amount'])
         vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else "Unknown"
         due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
 
-        # Use a Streamlit button for the invoice number pill
-        if st.button(inv_num, key=f"inv_pill_{inv_num}", help="View invoice details", use_container_width=False):
-            st.session_state.selected_invoice = inv_num
-            st.session_state.page = "Invoices"
-            st.rerun()
-
-        # Rest of the card content
-        st.markdown(f"""
-            <div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>
-            <div class="card-amount">{abbr_currency(amount)}</div>
-            <div class="vendor-name">{vendor}</div>
-            <div class="due-date">Due: {due_date}</div>
-        """, unsafe_allow_html=True)
+        # Use a Streamlit button for the invoice pill (clickable)
+        # We'll place the button inside a container and use columns for layout
+        with st.container():
+            # Row 1: invoice pill (left) and status badge (right)
+            col_pill, col_status = st.columns([1, 1])
+            with col_pill:
+                if st.button(str(inv_num), key=f"inv_pill_{inv_num}", help="View invoice details", use_container_width=True):
+                    st.session_state.selected_invoice = str(inv_num)
+                    st.session_state.page = "Invoices"
+                    st.rerun()
+            with col_status:
+                st.markdown(f'<div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>', unsafe_allow_html=True)
+            
+            # Amount, vendor, due date
+            st.markdown(f'<div class="card-amount">{abbr_currency(amount)}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="vendor-name">{vendor}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="due-date">Due: {due_date}</div>', unsafe_allow_html=True)
 
     # Display cards in rows of 4
     for i in range(0, len(page_df), 4):
