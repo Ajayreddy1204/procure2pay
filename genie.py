@@ -32,7 +32,7 @@ def process_custom_query(query: str) -> dict:
     }
 
 def render_quick_analysis_response(result: dict):
-    """Render rich, type‑specific response for quick analysis."""
+    """Render rich, type‑specific response with colorful styling."""
     analysis_type = result.get("type", "spending_overview")
     metrics = result.get("metrics", {})
     anomaly = result.get("anomaly")
@@ -40,27 +40,40 @@ def render_quick_analysis_response(result: dict):
     vendors_df = result.get("vendors_df")
     extra_dfs = result.get("extra_dfs", {})
 
-    # ----- Metrics row (dynamic) -----
+    # Metrics row with colorful metric cards
     if metrics:
+        st.markdown("### 📊 Key Metrics")
         cols = st.columns(len(metrics))
+        colors = ["#fef3c7", "#dbeafe", "#dcfce7", "#fce7f3", "#e0e7ff", "#fef9c3"]
         for i, (key, value) in enumerate(metrics.items()):
             with cols[i]:
                 label = key.replace("_", " ").title()
                 if isinstance(value, (int, float)):
                     if "pct" in key or "rate" in key:
-                        st.metric(label, f"{value:.1f}%")
+                        display = f"{value:.1f}%"
                     elif "spend" in key or "amount" in key:
-                        st.metric(label, abbr_currency(value))
+                        display = abbr_currency(value)
                     else:
-                        st.metric(label, f"{value:,}")
+                        display = f"{value:,}"
                 else:
-                    st.metric(label, value)
+                    display = str(value)
+                st.markdown(f"""
+                <div style="background-color: {colors[i % len(colors)]}; border-radius: 12px; padding: 12px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                    <div style="font-size: 0.85rem; color: #4b5563;">{label}</div>
+                    <div style="font-size: 1.5rem; font-weight: 700; color: #1f2937;">{display}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
-    # ----- Anomaly warning -----
+    # Anomaly warning with gradient background
     if anomaly:
-        st.warning(f"⚠️ **Anomaly Detected**\n\n{anomaly}")
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-left: 6px solid #d97706; border-radius: 12px; padding: 12px 16px; margin: 16px 0;">
+            <strong style="color: #92400e;">⚠️ Anomaly Detected</strong><br/>
+            <span style="color: #78350f;">{anomaly}</span>
+        </div>
+        """, unsafe_allow_html=True)
 
-    # ----- Type‑specific charts -----
+    # Type‑specific charts
     if analysis_type == "spending_overview":
         if monthly_df is not None and not monthly_df.empty:
             monthly_df.columns = [c.upper() for c in monthly_df.columns]
@@ -69,7 +82,7 @@ def render_quick_analysis_response(result: dict):
             elif "MONTH_STR" not in monthly_df.columns:
                 monthly_df = monthly_df.rename(columns={monthly_df.columns[0]: "MONTH_STR"})
 
-            st.subheader("Spending Trends")
+            st.markdown("### 📈 Spending Trends")
             chart_col1, chart_col2, chart_col3 = st.columns(3)
             with chart_col1:
                 if "MONTHLY_SPEND" in monthly_df.columns:
@@ -78,27 +91,26 @@ def render_quick_analysis_response(result: dict):
             with chart_col2:
                 if "INVOICE_COUNT" in monthly_df.columns:
                     inv_df = monthly_df[["MONTH_STR", "INVOICE_COUNT"]].rename(columns={"INVOICE_COUNT": "VALUE"})
-                    alt_bar(inv_df, x="MONTH_STR", y="VALUE", title="Invoice Volume", height=200)
+                    alt_bar(inv_df, x="MONTH_STR", y="VALUE", title="Invoice Volume", height=200, color="#3b82f6")
             with chart_col3:
                 if "VENDOR_COUNT" in monthly_df.columns:
                     vend_df = monthly_df[["MONTH_STR", "VENDOR_COUNT"]].rename(columns={"VENDOR_COUNT": "VALUE"})
-                    alt_bar(vend_df, x="MONTH_STR", y="VALUE", title="Active Vendors", height=200)
+                    alt_bar(vend_df, x="MONTH_STR", y="VALUE", title="Active Vendors", height=200, color="#10b981")
 
         if vendors_df is not None and not vendors_df.empty:
             vendors_df.columns = [c.upper() for c in vendors_df.columns]
             if "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
-                st.subheader("Top 10 Vendors by Spend (YTD)")
+                st.markdown("### 🏆 Top 10 Vendors by Spend (YTD)")
                 alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=400, color="#22c55e")
 
     elif analysis_type == "vendor_analysis":
         if vendors_df is not None and not vendors_df.empty:
             vendors_df.columns = [c.upper() for c in vendors_df.columns]
             if "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
-                st.subheader("Top Vendors by Spend (Last 6 Months)")
-                alt_bar(vendors_df.head(15), x="VENDOR_NAME", y="SPEND", horizontal=True, height=500, color="#3b82f6")
-                # Show invoice count if available
+                st.markdown("### 🏭 Top Vendors by Spend (Last 6 Months)")
+                alt_bar(vendors_df.head(15), x="VENDOR_NAME", y="SPEND", horizontal=True, height=500, color="#8b5cf6")
                 if "INVOICE_COUNT" in vendors_df.columns:
-                    st.subheader("Invoice Frequency by Vendor")
+                    st.markdown("### 📄 Invoice Frequency by Vendor")
                     freq_df = vendors_df[["VENDOR_NAME", "INVOICE_COUNT"]].head(10)
                     alt_bar(freq_df, x="VENDOR_NAME", y="INVOICE_COUNT", horizontal=True, height=300, color="#f59e0b")
 
@@ -109,7 +121,7 @@ def render_quick_analysis_response(result: dict):
                 monthly_df = monthly_df.rename(columns={"MONTH": "MONTH_STR"})
             elif "MONTH_STR" not in monthly_df.columns:
                 monthly_df = monthly_df.rename(columns={monthly_df.columns[0]: "MONTH_STR"})
-            st.subheader("Payment Performance Trend")
+            st.markdown("### ⏱️ Payment Performance Trend")
             col1, col2 = st.columns(2)
             with col1:
                 if "AVG_DAYS" in monthly_df.columns:
@@ -119,21 +131,20 @@ def render_quick_analysis_response(result: dict):
                 if "LATE_PAYMENTS" in monthly_df.columns and "TOTAL_PAYMENTS" in monthly_df.columns:
                     monthly_df["LATE_PCT"] = (monthly_df["LATE_PAYMENTS"] / monthly_df["TOTAL_PAYMENTS"]) * 100
                     late_df = monthly_df[["MONTH_STR", "LATE_PCT"]].rename(columns={"LATE_PCT": "VALUE"})
-                    alt_line_monthly(late_df, month_col="MONTH_STR", value_col="VALUE", height=250, title="Late Payments (%)")
+                    alt_line_monthly(late_df, month_col="MONTH_STR", value_col="VALUE", height=250, title="Late Payments (%)", color="#ef4444")
 
     elif analysis_type == "invoice_aging":
         if vendors_df is not None and not vendors_df.empty:
             vendors_df.columns = [c.upper() for c in vendors_df.columns]
             if "AGING_BUCKET" in vendors_df.columns and "SPEND" in vendors_df.columns:
-                st.subheader("Invoice Aging Buckets")
+                st.markdown("### 📅 Invoice Aging Buckets")
                 alt_bar(vendors_df, x="AGING_BUCKET", y="SPEND", title="Outstanding Spend by Aging", horizontal=False, height=300, color="#ef4444")
             elif "CNT" in vendors_df.columns:
-                st.subheader("Aging Distribution (Count)")
+                st.markdown("### 🥧 Aging Distribution")
                 alt_donut_status(vendors_df, label_col="AGING_BUCKET", value_col="CNT", title="Invoice Count by Age", height=300)
 
-    # ----- Prescriptive Insights (AI‑generated) -----
+    # Prescriptive Insights (AI‑generated)
     if "analyst_response" not in result or not result["analyst_response"]:
-        # Build a data summary for Bedrock
         monthly_preview = ""
         if monthly_df is not None:
             monthly_preview = monthly_df.head(6).to_string(index=False)
@@ -174,8 +185,8 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
 
-    # ----- Expandable SQL -----
-    with st.expander("Query outputs"):
+    # Expandable SQL
+    with st.expander("🔍 Query outputs"):
         sql_dict = result.get("sql", {})
         if sql_dict:
             for name, sql_text in sql_dict.items():
@@ -184,81 +195,96 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
             st.code(result["sql"], language="sql")
 
 def render_genie():
+    # Enhanced global CSS for Genie tab
     st.markdown("""
     <style>
+    /* Genie cards */
     .genie-card {
-        background: white;
-        border-radius: 16px;
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        border-radius: 20px;
         padding: 1.5rem;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
         height: 100%;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
+        border: 1px solid rgba(203, 213, 225, 0.3);
     }
     .genie-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 12px 24px rgba(0,0,0,0.1);
+        transform: translateY(-6px);
+        box-shadow: 0 20px 30px -12px rgba(0,0,0,0.15);
+        border-color: #cbd5e1;
     }
     .genie-card h3 {
-        font-size: 1.25rem;
-        font-weight: 600;
+        font-size: 1.3rem;
+        font-weight: 700;
         margin-bottom: 0.5rem;
+        background: linear-gradient(135deg, #1e293b, #334155);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
     .genie-card p {
-        color: #64748b;
-        font-size: 0.875rem;
+        color: #475569;
+        font-size: 0.9rem;
         line-height: 1.5;
         margin-bottom: 1.5rem;
     }
-    .genie-card button {
-        width: 100%;
-        margin-top: auto;
+    /* Chat message bubbles */
+    .chat-message-user {
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+        color: white;
+        padding: 12px 18px;
+        border-radius: 20px 20px 4px 20px;
+        margin: 8px 0;
+        max-width: 80%;
+        align-self: flex-end;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.1);
     }
-    .suggestion-chip {
-        background: #f1f5f9;
-        border-radius: 999px;
-        padding: 0.4rem 1rem;
-        font-size: 0.8rem;
-        cursor: pointer;
-        transition: background 0.2s;
-        display: inline-block;
-        margin: 0.2rem;
-    }
-    .suggestion-chip:hover {
-        background: #e2e8f0;
+    .chat-message-assistant {
+        background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+        color: #0f172a;
+        padding: 12px 18px;
+        border-radius: 20px 20px 20px 4px;
+        margin: 8px 0;
+        max-width: 80%;
+        align-self: flex-start;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.05);
     }
     .chat-scrollable {
-        max-height: 400px;
+        max-height: 500px;
         overflow-y: auto;
         padding-right: 8px;
         margin-bottom: 1rem;
+        scroll-behavior: smooth;
     }
-    .chat-message-user {
-        background: #1459d2;
-        color: white;
-        padding: 10px 14px;
-        border-radius: 16px;
-        margin: 6px 0;
-        max-width: 80%;
-        align-self: flex-end;
-    }
-    .chat-message-assistant {
+    /* Suggestions chips */
+    .suggestion-chip {
         background: #f1f5f9;
-        color: #0f172a;
-        padding: 10px 14px;
-        border-radius: 16px;
-        margin: 6px 0;
-        max-width: 80%;
+        border-radius: 40px;
+        padding: 0.4rem 1rem;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: inline-block;
+        margin: 0.2rem;
+        border: 1px solid #e2e8f0;
     }
-    .centered-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
+    .suggestion-chip:hover {
+        background: #3b82f6;
+        color: white;
+        border-color: #3b82f6;
+    }
+    /* Metrics card inside Genie */
+    .metric-card {
+        border-radius: 16px;
+        padding: 12px;
         text-align: center;
-        padding: 2rem;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        transition: transform 0.2s;
+    }
+    .metric-card:hover {
+        transform: translateY(-2px);
     }
     </style>
     """, unsafe_allow_html=True)
@@ -312,20 +338,22 @@ def render_genie():
                 st.session_state.genie_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
         st.rerun()
 
-    st.markdown("## Welcome to ProcureIQ Genie")
-    st.markdown("Let Genie run one of these quick analyses for you.")
+    st.markdown("## 🧞 Welcome to ProcureIQ Genie")
+    st.markdown("Your AI‑powered procurement assistant. Choose a quick analysis or ask a custom question.")
+
+    # Quick analysis cards
     cols = st.columns(4)
     quick_options = {
-        "spending_overview": ("Spending Overview", "Track total spend, monthly trends and major changes"),
-        "vendor_analysis": ("Vendor Analysis", "Understand vendor-wise spend, concentration, and dependency"),
-        "payment_performance": ("Payment Performance", "Identify delays, late payments, and cycle time issues"),
-        "invoice_aging": ("Invoice Aging", "See overdue invoices, risk buckets, and problem areas")
+        "spending_overview": ("💰 Spending Overview", "Track total spend, monthly trends and major changes", "#3b82f6"),
+        "vendor_analysis": ("🏭 Vendor Analysis", "Understand vendor-wise spend, concentration, and dependency", "#8b5cf6"),
+        "payment_performance": ("⏱️ Payment Performance", "Identify delays, late payments, and cycle time issues", "#10b981"),
+        "invoice_aging": ("📅 Invoice Aging", "See overdue invoices, risk buckets, and problem areas", "#f59e0b")
     }
-    for idx, (key, (title, desc)) in enumerate(quick_options.items()):
+    for idx, (key, (title, desc, color)) in enumerate(quick_options.items()):
         with cols[idx]:
             with st.container():
                 st.markdown(f"""
-                <div class="genie-card">
+                <div class="genie-card" style="border-top: 4px solid {color};">
                     <div>
                         <h3>{title}</h3>
                         <p>{desc}</p>
@@ -333,7 +361,7 @@ def render_genie():
                 </div>
                 """, unsafe_allow_html=True)
                 if st.button("Ask Genie", key=f"card_{key}", use_container_width=True):
-                    st.session_state.auto_run_query = title
+                    st.session_state.auto_run_query = title.split(" ", 1)[1]  # remove emoji
                     st.rerun()
 
     st.markdown("---")
@@ -341,7 +369,7 @@ def render_genie():
     left_col, right_col = st.columns([0.35, 0.65], gap="large")
 
     with left_col:
-        with st.expander("Saved insights", expanded=False):
+        with st.expander("📌 Saved insights", expanded=False):
             insights = get_saved_insights_cached(page="genie")
             if insights:
                 for ins in insights:
@@ -351,17 +379,18 @@ def render_genie():
             else:
                 st.caption("Save any Genie answer to see it here.")
 
-        with st.expander("Frequently asked by you", expanded=False):
+        with st.expander("🔥 Frequently asked by you", expanded=False):
             suggestions = [
                 "forecast cash outflow for the next 7, 14, 30, 60, and 90 days",
                 "show me total spend ytd, monthly trends, and top 5 vendors",
                 "which invoices should we pay early to capture discounts"
             ]
             st.markdown('<div style="margin-bottom: 0.5rem;">Click a chip to fill the input:</div>', unsafe_allow_html=True)
+            chip_html = '<div style="display: flex; flex-wrap: wrap;">'
             for chip in suggestions:
-                if st.button(chip, key=f"chip_{chip[:20]}", use_container_width=True):
-                    st.session_state.genie_prefill = chip
-                    st.rerun()
+                chip_html += f'<div class="suggestion-chip" onclick="document.querySelector(\'input[type=text]\').value = \'{chip}\'; document.querySelector(\'form\').submit();">{chip}</div>'
+            chip_html += '</div>'
+            st.markdown(chip_html, unsafe_allow_html=True)
             faqs = get_frequent_questions_by_user_cached(5)
             if faqs:
                 st.markdown("---")
@@ -373,7 +402,7 @@ def render_genie():
             else:
                 st.caption("Your frequent questions will appear here.")
 
-        with st.expander("Most frequent (all)", expanded=False):
+        with st.expander("🌍 Most frequent (all)", expanded=False):
             all_faqs = get_frequent_questions_all_cached(5)
             if all_faqs:
                 for faq in all_faqs:
@@ -382,9 +411,9 @@ def render_genie():
                 st.caption("No questions yet.")
 
     with right_col:
-        st.markdown('<div class="centered-container">', unsafe_allow_html=True)
-        st.markdown("### Start a Conversation")
-        st.markdown("Ask questions about your Procurement to Pay data, or select a pre-built analysis from the library.")
+        st.markdown('<div style="text-align: center; margin-bottom: 1rem;">', unsafe_allow_html=True)
+        st.markdown("### 💬 Start a Conversation")
+        st.markdown("Ask a natural language question about your procurement data.")
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="chat-scrollable">', unsafe_allow_html=True)
@@ -392,7 +421,7 @@ def render_genie():
             if msg["role"] == "user":
                 st.markdown(f'<div class="chat-message-user"><strong>You</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
             else:
-                st.markdown(f'<div class="chat-message-assistant"><strong>Genie</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="chat-message-assistant"><strong>🧞 Genie</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
                 if "response" in msg and msg["response"]:
                     resp = msg["response"]
                     if resp.get("layout") == "quick":
