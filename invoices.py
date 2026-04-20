@@ -17,7 +17,6 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
         val = inv_row.get(key, default)
         if pd.isna(val):
             return default
-        # Convert date/datetime to string
         if isinstance(val, (date, datetime)):
             return val.strftime("%Y-%m-%d")
         return val
@@ -61,7 +60,6 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
         status = get_val("invoice_status", "").upper()
         status_color = "#dc2626" if status == "OVERDUE" else "#16a34a" if status == "PAID" else "#f59e0b"
         st.markdown(f"<span style='color:{status_color}; font-weight:bold;'>{status}</span>", unsafe_allow_html=True)
-        st.markdown("")  # empty spacer
 
     st.markdown("---")
 
@@ -79,39 +77,50 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
     """
     hist_df = run_query(hist_sql)
     
+    # If no history found, create default rows from spec
     if hist_df.empty:
-        # Example rows from spec
         hist_df = pd.DataFrame([
             {
-                "STATUS": "OPEN",
-                "EFFECTIVE_DATE": get_val("invoice_date", "2026-01-02"),
-                "STATUS_NOTES": "Invoice opened and assigned for processing. Pending verification of delivery confirmation, invoice accuracy, and appropriate cost center allocation."
+                "status": "OPEN",
+                "effective_date": get_val("invoice_date", "2026-01-02"),
+                "status_notes": "Invoice opened and assigned for processing. Pending verification of delivery confirmation, invoice accuracy, and appropriate cost center allocation."
             },
             {
-                "STATUS": "OVERDUE",
-                "EFFECTIVE_DATE": get_val("due_date", "2026-02-01") if get_val("due_date") else "2026-02-16",
-                "STATUS_NOTES": "Invoice overdue following standard payment term expiry. Finance team has been notified for priority action. Vendor relations team informed to manage supplier expectations."
+                "status": "OVERDUE",
+                "effective_date": get_val("due_date", "2026-02-01") if get_val("due_date") else "2026-02-16",
+                "status_notes": "Invoice overdue following standard payment term expiry. Finance team has been notified for priority action. Vendor relations team informed to manage supplier expectations."
             }
         ])
+    else:
+        # Ensure column names are lowercase for consistency
+        hist_df.columns = [c.lower() for c in hist_df.columns]
+        # Select only needed columns
+        hist_df = hist_df[["status", "effective_date", "status_notes"]].copy()
     
+    # Add PAID row if button was clicked
     paid_key = f"paid_{inv_num}"
     if st.session_state.get(paid_key, False):
-        if not any(hist_df["STATUS"] == "PAID"):
+        if not any(hist_df["status"] == "PAID"):
             new_row = pd.DataFrame([{
-                "STATUS": "PAID",
-                "EFFECTIVE_DATE": date.today().strftime("%Y-%m-%d"),
-                "STATUS_NOTES": "Processed via ProcureSpendIQ app"
+                "status": "PAID",
+                "effective_date": date.today().strftime("%Y-%m-%d"),
+                "status_notes": "Processed via ProcureSpendIQ app"
             }])
             hist_df = pd.concat([hist_df, new_row], ignore_index=True)
     
+    # Convert effective_date to string for display (if it's datetime)
+    hist_df["effective_date"] = hist_df["effective_date"].apply(
+        lambda x: x.strftime("%Y-%m-%d") if isinstance(x, (date, datetime)) else str(x)
+    )
+    
     st.dataframe(
-        hist_df[["STATUS", "EFFECTIVE_DATE", "STATUS_NOTES"]],
+        hist_df[["status", "effective_date", "status_notes"]],
         use_container_width=True,
         hide_index=True,
         column_config={
-            "STATUS": st.column_config.TextColumn("Status", width="small"),
-            "EFFECTIVE_DATE": st.column_config.DateColumn("Effective Date", width="small"),
-            "STATUS_NOTES": st.column_config.TextColumn("Status Notes", width="large"),
+            "status": st.column_config.TextColumn("Status", width="small"),
+            "effective_date": st.column_config.TextColumn("Effective Date", width="small"),
+            "status_notes": st.column_config.TextColumn("Status Notes", width="large"),
         }
     )
 
