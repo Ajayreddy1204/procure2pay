@@ -7,10 +7,10 @@ from utils import clean_invoice_number, abbr_currency, safe_number, safe_int
 from config import DATABASE
 
 # ------------------------------------------------------------
-# Helper: Render Invoice Detail View (Enhanced & Colorful)
+# Helper: Render Invoice Detail View (Attractive & Styling without Styler)
 # ------------------------------------------------------------
 def render_invoice_detail(inv_row: dict, inv_num: str):
-    """Render the detailed invoice view with attractive layout and styling."""
+    """Render the detailed invoice view with attractive layout."""
     
     def get_val(key, default=""):
         val = inv_row.get(key, default)
@@ -41,10 +41,9 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
     </div>
     """, unsafe_allow_html=True)
 
-    # ---- Invoice Summary (using st.metric in two rows) ----
+    # ---- Invoice Summary (st.metric rows) ----
     st.markdown("### 📄 Invoice Summary")
     
-    # First row of metrics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Invoice Number", inv_num)
@@ -55,7 +54,6 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
     with col4:
         st.metric("PO Number", get_val("po_number", ""))
     
-    # Second row of metrics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("PO Amount", abbr_currency(get_val("po_amount", 0)))
@@ -75,7 +73,7 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
 
     st.markdown("---")
 
-    # ---- Status History Table (with colored status badges) ----
+    # ---- Status History Table (simple but clean) ----
     st.markdown("### 📜 Status History")
     hist_sql = f"""
         SELECT
@@ -106,7 +104,7 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
         hist_df.columns = [c.lower() for c in hist_df.columns]
         hist_df = hist_df[["status", "effective_date", "status_notes"]].copy()
     
-    # Add PAID row if button was clicked
+    # Add PAID row if button clicked
     paid_key = f"paid_{inv_num}"
     if st.session_state.get(paid_key, False):
         if not any(hist_df["status"] == "PAID"):
@@ -122,19 +120,17 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
         lambda x: x.strftime("%Y-%m-%d") if isinstance(x, (date, datetime)) else str(x)
     )
     
-    # Define color mapping for status badges
-    def color_status(val):
-        if val == "PAID":
-            return "background-color: #d4edda; color: #155724; font-weight: bold; border-radius: 12px; padding: 2px 8px;"
-        elif val == "OVERDUE":
-            return "background-color: #f8d7da; color: #721c24; font-weight: bold; border-radius: 12px; padding: 2px 8px;"
-        elif val == "OPEN":
-            return "background-color: #fff3cd; color: #856404; font-weight: bold; border-radius: 12px; padding: 2px 8px;"
-        else:
-            return "background-color: #e2e3e5; color: #383d41; font-weight: bold; border-radius: 12px; padding: 2px 8px;"
-    
-    styled_hist = hist_df.style.applymap(color_status, subset=["status"])
-    st.dataframe(styled_hist, use_container_width=True, hide_index=True)
+    # Display as a regular dataframe (no Styler, but with column config)
+    st.dataframe(
+        hist_df[["status", "effective_date", "status_notes"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "status": st.column_config.TextColumn("Status", width="small"),
+            "effective_date": st.column_config.TextColumn("Effective Date", width="small"),
+            "status_notes": st.column_config.TextColumn("Status Notes", width="large"),
+        }
+    )
 
     st.markdown("---")
 
@@ -178,7 +174,6 @@ def render_invoice_detail(inv_row: dict, inv_num: str):
                 st.markdown("**🏢 Street**")
                 st.info(row.get("street", ""))
         else:
-            # Fallback data
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown("**🆔 Vendor ID**")
@@ -307,11 +302,7 @@ def render_invoices():
             st.session_state.selected_invoice = None
             st.rerun()
 
-    # ---- Invoice List View (same as before) ----
-    # ... (keep the existing list view code unchanged)
-    # (I'll include it for completeness, but you can keep your existing list view)
-    
-    # For brevity, I'm including the list view from previous version:
+    # ---- Invoice List View (unchanged, keep existing) ----
     if "invoice_search_term" not in st.session_state:
         st.session_state.invoice_search_term = ""
 
