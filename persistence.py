@@ -79,12 +79,18 @@ def get_cache(question):
 
 def set_cache(question, response):
     q_hash = hashlib.md5(question.lower().strip().encode()).hexdigest()
+    # Deep‑convert the response to JSON‑serializable form
     serializable_response = make_json_serializable(response)
+    try:
+        response_json = json.dumps(serializable_response)
+    except Exception as e:
+        st.error(f"Failed to serialize response for caching: {e}")
+        return
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''INSERT OR REPLACE INTO query_cache (query_hash, question, response_json, created_at, last_hit_at, hit_count)
                  VALUES (?, ?, ?, ?, ?, COALESCE((SELECT hit_count+1 FROM query_cache WHERE query_hash=?), 1))''',
-              (q_hash, question, json.dumps(serializable_response), datetime.now(), datetime.now(), q_hash))
+              (q_hash, question, response_json, datetime.now(), datetime.now(), q_hash))
     conn.commit()
     conn.close()
 
