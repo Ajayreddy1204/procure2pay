@@ -2,13 +2,12 @@
 import streamlit as st
 import pandas as pd
 import json
-import re
 import html
 import uuid
 from datetime import datetime
 from athena_client import run_query
 from bedrock_client import ask_bedrock
-from utils import abbr_currency, auto_chart, alt_line_monthly, alt_bar, ensure_limit, is_safe_sql
+from utils import abbr_currency, auto_chart, alt_line_monthly, alt_bar, alt_donut_status, ensure_limit, is_safe_sql
 from semantic_model import SYSTEM_PROMPT, DESCRIPTIVE_PROMPT_TEMPLATE, generate_sql
 from persistence import get_saved_insights_cached, get_frequent_questions_by_user_cached, get_frequent_questions_all_cached, save_chat_message, save_question, set_cache, get_cache
 from quick_analysis import run_quick_analysis
@@ -31,6 +30,158 @@ def process_custom_query(query: str) -> dict:
         "question": query,
         "analyst_response": analyst_text
     }
+
+def render_quick_analysis_response(result: dict):
+    """Render rich, type‑specific response for quick analysis."""
+    analysis_type = result.get("type", "spending_overview")
+    metrics = result.get("metrics", {})
+    anomaly = result.get("anomaly")
+    monthly_df = result.get("monthly_df")
+    vendors_df = result.get("vendors_df")
+    extra_dfs = result.get("extra_dfs", {})
+
+    # ----- Metrics row (dynamic) -----
+    if metrics:
+        cols = st.columns(len(metrics))
+        for i, (key, value) in enumerate(metrics.items()):
+            with cols[i]:
+                label = key.replace("_", " ").title()
+                if isinstance(value, (int, float)):
+                    if "pct" in key or "rate" in key:
+                        st.metric(label, f"{value:.1f}%")
+                    elif "spend" in key or "amount" in key:
+                        st.metric(label, abbr_currency(value))
+                    else:
+                        st.metric(label, f"{value:,}")
+                else:
+                    st.metric(label, value)
+
+    # ----- Anomaly warning -----
+    if anomaly:
+        st.warning(f"⚠️ **Anomaly Detected**\n\n{anomaly}")
+
+    # ----- Type‑specific charts -----
+    if analysis_type == "spending_overview":
+        if monthly_df is not None and not monthly_df.empty:
+            monthly_df.columns = [c.upper() for c in monthly_df.columns]
+            if "MONTH" in monthly_df.columns:
+                monthly_df = monthly_df.rename(columns={"MONTH": "MONTH_STR"})
+            elif "MONTH_STR" not in monthly_df.columns:
+                monthly_df = monthly_df.rename(columns={monthly_df.columns[0]: "MONTH_STR"})
+
+            st.subheader("Spending Trends")
+            chart_col1, chart_col2, chart_col3 = st.columns(3)
+            with chart_col1:
+                if "MONTHLY_SPEND" in monthly_df.columns:
+                    spend_df = monthly_df[["MONTH_STR", "MONTHLY_SPEND"]].rename(columns={"MONTHLY_SPEND": "VALUE"})
+                    alt_line_monthly(spend_df, month_col="MONTH_STR", value_col="VALUE", height=200, title="Monthly Spend")
+            with chart_col2:
+                if "INVOICE_COUNT" in monthly_df.columns:
+                    inv_df = monthly_df[["MONTH_STR", "INVOICE_COUNT"]].rename(columns={"INVOICE_COUNT": "VALUE"})
+                    alt_bar(inv_df, x="MONTH_STR", y="VALUE", title="Invoice Volume", height=200)
+            with chart_col3:
+                if "VENDOR_COUNT" in monthly_df.columns:
+                    vend_df = monthly_df[["MONTH_STR", "VENDOR_COUNT"]].rename(columns={"VENDOR_COUNT": "VALUE"})
+                    alt_bar(vend_df, x="MONTH_STR", y="VALUE", title="Active Vendors", height=200)
+
+        if vendors_df is not None and not vendors_df.empty:
+            vendors_df.columns = [c.upper() for c in vendors_df.columns]
+            if "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
+                st.subheader("Top 10 Vendors by Spend (YTD)")
+                alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=400, color="#22c55e")
+
+    elif analysis_type == "vendor_analysis":
+        if vendors_df is not None and not vendors_df.empty:
+            vendors_df.columns = [c.upper() for c in vendors_df.columns]
+            if "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
+                st.subheader("Top Vendors by Spend (Last 6 Months)")
+                alt_bar(vendors_df.head(15), x="VENDOR_NAME", y="SPEND", horizontal=True, height=500, color="#3b82f6")
+                # Show invoice count if available
+                if "INVOICE_COUNT" in vendors_df.columns:
+                    st.subheader("Invoice Frequency by Vendor")
+                    freq_df = vendors_df[["VENDOR_NAME", "INVOICE_COUNT"]].head(10)
+                    alt_bar(freq_df, x="VENDOR_NAME", y="INVOICE_COUNT", horizontal=True, height=300, color="#f59e0b")
+
+    elif analysis_type == "payment_performance":
+        if monthly_df is not None and not monthly_df.empty:
+            monthly_df.columns = [c.upper() for c in monthly_df.columns]
+            if "MONTH" in monthly_df.columns:
+                monthly_df = monthly_df.rename(columns={"MONTH": "MONTH_STR"})
+            elif "MONTH_STR" not in monthly_df.columns:
+                monthly_df = monthly_df.rename(columns={monthly_df.columns[0]: "MONTH_STR"})
+            st.subheader("Payment Performance Trend")
+            col1, col2 = st.columns(2)
+            with col1:
+                if "AVG_DAYS" in monthly_df.columns:
+                    days_df = monthly_df[["MONTH_STR", "AVG_DAYS"]].rename(columns={"AVG_DAYS": "VALUE"})
+                    alt_line_monthly(days_df, month_col="MONTH_STR", value_col="VALUE", height=250, title="Avg Days to Pay")
+            with col2:
+                if "LATE_PAYMENTS" in monthly_df.columns and "TOTAL_PAYMENTS" in monthly_df.columns:
+                    monthly_df["LATE_PCT"] = (monthly_df["LATE_PAYMENTS"] / monthly_df["TOTAL_PAYMENTS"]) * 100
+                    late_df = monthly_df[["MONTH_STR", "LATE_PCT"]].rename(columns={"LATE_PCT": "VALUE"})
+                    alt_line_monthly(late_df, month_col="MONTH_STR", value_col="VALUE", height=250, title="Late Payments (%)")
+
+    elif analysis_type == "invoice_aging":
+        if vendors_df is not None and not vendors_df.empty:
+            vendors_df.columns = [c.upper() for c in vendors_df.columns]
+            if "AGING_BUCKET" in vendors_df.columns and "SPEND" in vendors_df.columns:
+                st.subheader("Invoice Aging Buckets")
+                alt_bar(vendors_df, x="AGING_BUCKET", y="SPEND", title="Outstanding Spend by Aging", horizontal=False, height=300, color="#ef4444")
+            elif "CNT" in vendors_df.columns:
+                st.subheader("Aging Distribution (Count)")
+                alt_donut_status(vendors_df, label_col="AGING_BUCKET", value_col="CNT", title="Invoice Count by Age", height=300)
+
+    # ----- Prescriptive Insights (AI‑generated) -----
+    if "analyst_response" not in result or not result["analyst_response"]:
+        # Build a data summary for Bedrock
+        monthly_preview = ""
+        if monthly_df is not None:
+            monthly_preview = monthly_df.head(6).to_string(index=False)
+        vendors_preview = ""
+        if vendors_df is not None:
+            vendors_preview = vendors_df.head(10).to_string(index=False)
+        metrics_str = json.dumps({k: (float(v) if isinstance(v, (int, float)) else str(v)) for k, v in metrics.items()}, indent=2)
+
+        analysis_prompts = {
+            "spending_overview": "Focus on total spend, month‑over‑month changes, vendor concentration, and any anomalies. Provide actions to optimise spend.",
+            "vendor_analysis": "Focus on vendor concentration (top vendors' share), over‑reliance risks, invoice frequency, and vendor performance. Suggest diversification and contingency plans.",
+            "payment_performance": "Focus on average days to pay, late payment trends, and their impact on supplier relationships and cash flow. Suggest process improvements.",
+            "invoice_aging": "Focus on overdue amounts, aging buckets, and potential cash flow risks. Suggest collection strategies and early payment discounts."
+        }
+        prompt = f"""
+You are a senior procurement analyst. Based on the following data from a {analysis_type.replace('_', ' ')} analysis, write a response with two sections:
+
+1. **Descriptive** – What the data shows. Cite exact numbers, identify trends, and highlight anomalies. Keep it concise (3‑5 sentences).
+2. **Prescriptive** – Specific recommended actions and risks based on the data. List 3‑5 bullet points. Each bullet must include a specific finding, a concrete action, and a brief 'Why it matters'.
+
+Data metrics:
+{metrics_str}
+
+Monthly trend (first 6 rows):
+{monthly_preview}
+
+Top vendors / aging data (first 10 rows):
+{vendors_preview}
+
+Analysis focus: {analysis_prompts.get(analysis_type, "Provide actionable procurement insights.")}
+
+Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
+"""
+        analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst.")
+        result["analyst_response"] = analyst_text
+
+    if result.get("analyst_response"):
+        st.markdown("### 💡 Key Insights")
+        st.markdown(result["analyst_response"])
+
+    # ----- Expandable SQL -----
+    with st.expander("Query outputs"):
+        sql_dict = result.get("sql", {})
+        if sql_dict:
+            for name, sql_text in sql_dict.items():
+                st.code(sql_text, language="sql")
+        elif "sql" in result and isinstance(result["sql"], str):
+            st.code(result["sql"], language="sql")
 
 def render_genie():
     st.markdown("""
@@ -112,6 +263,7 @@ def render_genie():
     </style>
     """, unsafe_allow_html=True)
 
+    # Session state initialisation
     if "genie_session_id" not in st.session_state:
         st.session_state.genie_session_id = str(uuid.uuid4())
         st.session_state.genie_messages = []
@@ -125,7 +277,6 @@ def render_genie():
     if "genie_prefill" not in st.session_state:
         st.session_state.genie_prefill = ""
 
-    # Map quick analysis titles to keys
     quick_map = {
         "Spending Overview": "spending_overview",
         "Vendor Analysis": "vendor_analysis",
@@ -245,50 +396,7 @@ def render_genie():
                 if "response" in msg and msg["response"]:
                     resp = msg["response"]
                     if resp.get("layout") == "quick":
-                        metrics = resp.get("metrics", {})
-                        if metrics:
-                            metric_cols = st.columns(len(metrics))
-                            for i, (k, v) in enumerate(metrics.items()):
-                                with metric_cols[i]:
-                                    st.metric(k.replace("_"," ").title(), abbr_currency(v) if isinstance(v, (int,float)) else str(v))
-                        anomaly = resp.get("anomaly")
-                        if anomaly:
-                            st.warning(f"⚠️ {anomaly}")
-                        monthly_df = resp.get("monthly_df")
-                        if monthly_df is not None and not monthly_df.empty:
-                            st.subheader("Spending Trends")
-                            # Dynamic column detection for monthly data
-                            month_candidates = ['MONTH', 'month', 'Month', 'month_str', 'MONTH_STR']
-                            value_candidates = ['MONTHLY_SPEND', 'monthly_spend', 'VALUE', 'value', 'AVG_DAYS', 'SPEND']
-                            month_col = None
-                            value_col = None
-                            for col in month_candidates:
-                                if col in monthly_df.columns:
-                                    month_col = col
-                                    break
-                            for col in value_candidates:
-                                if col in monthly_df.columns:
-                                    value_col = col
-                                    break
-                            if month_col and value_col:
-                                plot_df = monthly_df.rename(columns={month_col: "MONTH", value_col: "VALUE"})
-                                alt_line_monthly(plot_df, month_col="MONTH", value_col="VALUE", height=200)
-                            else:
-                                st.dataframe(monthly_df, use_container_width=True)
-                        vendors_df = resp.get("vendors_df")
-                        if vendors_df is not None and not vendors_df.empty:
-                            st.subheader("Top Vendors")
-                            # Rename columns to uppercase for consistency with alt_bar expectations
-                            vendors_df.columns = [c.upper() for c in vendors_df.columns]
-                            # Ensure required columns exist
-                            if "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
-                                alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=300)
-                            else:
-                                st.dataframe(vendors_df, use_container_width=True)
-                        with st.expander("View SQL used"):
-                            sql_dict = resp.get("sql", {})
-                            for name, sql_text in sql_dict.items():
-                                st.code(sql_text, language="sql")
+                        render_quick_analysis_response(resp)
                     elif resp.get("layout") == "analyst":
                         analyst_text = resp.get("analyst_response", "")
                         if analyst_text:
