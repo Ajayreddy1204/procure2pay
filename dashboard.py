@@ -85,7 +85,7 @@ def render_filters():
     return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.selected_vendor
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (pill tabs, redesigned cards)
+# Helper: Needs Attention Section (pill tabs, redesigned cards, clickable invoice)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     # Session state for tabs and pagination
@@ -197,17 +197,20 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     # Fallback sample data if query returns empty
     if attention_df.empty:
         sample_data = [
-            {"invoice_number": "90064", "sub_id": "59", "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
-            {"invoice_number": "90053", "sub_id": "89", "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
-            {"invoice_number": "90064", "sub_id": "18", "amount": 1600, "vendor_name": "Emerson Electric", "due_date": "2026-02-19"},
-            {"invoice_number": "90046", "sub_id": "07", "amount": 2200, "vendor_name": "McMaster-Carr", "due_date": "2026-02-19"},
-            {"invoice_number": "90056", "sub_id": "77", "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
-            {"invoice_number": "90074", "sub_id": "88", "amount": 15400, "vendor_name": "MSC Industrial", "due_date": "2026-02-19"},
-            {"invoice_number": "90082", "sub_id": "70", "amount": 13400, "vendor_name": "Sonepar USA", "due_date": "2026-02-23"},
-            {"invoice_number": "90007", "sub_id": "38", "amount": 2800, "vendor_name": "Emerson Electric", "due_date": "2026-02-25"}
+            {"invoice_number": 90064, "sub_id": "59", "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
+            {"invoice_number": 90053, "sub_id": "89", "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
+            {"invoice_number": 90064, "sub_id": "18", "amount": 1600, "vendor_name": "Emerson Electric", "due_date": "2026-02-19"},
+            {"invoice_number": 90046, "sub_id": "07", "amount": 2200, "vendor_name": "McMaster-Carr", "due_date": "2026-02-19"},
+            {"invoice_number": 90056, "sub_id": "77", "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
+            {"invoice_number": 90074, "sub_id": "88", "amount": 15400, "vendor_name": "MSC Industrial", "due_date": "2026-02-19"},
+            {"invoice_number": 90082, "sub_id": "70", "amount": 13400, "vendor_name": "Sonepar USA", "due_date": "2026-02-23"},
+            {"invoice_number": 90007, "sub_id": "38", "amount": 2800, "vendor_name": "Emerson Electric", "due_date": "2026-02-25"}
         ]
         attention_df = pd.DataFrame(sample_data)
         attention_df['due_date'] = pd.to_datetime(attention_df['due_date'])
+    else:
+        # Ensure invoice_number is integer (no decimal)
+        attention_df['invoice_number'] = attention_df['invoice_number'].apply(clean_invoice_number).astype(str)
 
     # Pagination: 8 cards per page
     items_per_page = 8
@@ -242,7 +245,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         transform: translateY(-3px);
         box-shadow: 0 8px 20px rgba(0,0,0,0.1);
     }
-    /* Circular badge */
+    /* Circular badge (clickable pill) */
     .circular-badge {
         background-color: #f3f4f6;
         border-radius: 50%;
@@ -255,6 +258,11 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         text-align: center;
         font-weight: bold;
         box-shadow: inset 0 0 0 1px #e5e7eb;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+    .circular-badge:hover {
+        background-color: #e5e7eb;
     }
     .invoice-num {
         font-size: 1.1rem;
@@ -303,20 +311,21 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else "Unknown"
         due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
 
-        st.markdown(f"""
-        <div class="attention-card">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                <div class="circular-badge">
-                    <div class="invoice-num">{inv_num}</div>
-                    <div class="small-num">{sub_id}</div>
-                </div>
-                <div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>
-            </div>
+        # Use a Streamlit button that looks like the circular badge (pill)
+        # We'll create a container and place the button inside the card
+        with st.container():
+            # This button is the invoice number pill (circular)
+            if st.button(inv_num, key=f"inv_pill_{inv_num}", help="View invoice details", use_container_width=False):
+                st.session_state.selected_invoice = inv_num
+                st.session_state.page = "Invoices"
+                st.rerun()
+            # The rest of the card content (status, amount, vendor, due date) is HTML
+            st.markdown(f"""
+            <div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>
             <div class="card-amount">{abbr_currency(amount)}</div>
             <div class="vendor-name">{vendor}</div>
             <div class="due-date">Due: {due_date}</div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
     # Display cards in rows of 4
     for i in range(0, len(page_df), 4):
@@ -324,7 +333,10 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         for j in range(4):
             if i + j < len(page_df):
                 with cols[j]:
+                    # Apply card styling wrapper
+                    st.markdown('<div class="attention-card">', unsafe_allow_html=True)
                     render_card(page_df.iloc[i + j])
+                    st.markdown('</div>', unsafe_allow_html=True)
 
     # Pagination controls
     col_prev, col_info, col_next = st.columns([1,2,1])
