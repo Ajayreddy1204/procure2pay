@@ -11,7 +11,6 @@ init_db()
 
 st.markdown("""
 <style>
-/* Reduce top padding */
 .block-container {
     padding-top: 0.5rem !important;
     padding-bottom: 0rem !important;
@@ -38,7 +37,7 @@ st.markdown("""
     text-align: left;
     margin-top: -0.5rem;
     margin-bottom: 0rem;
-    padding-left: 0;
+    padding-left: 0rem;
 }
 /* Navigation - centered */
 .nav-section {
@@ -46,7 +45,6 @@ st.markdown("""
     margin-bottom: 0rem;
     text-align: center;
 }
-/* Logo - top right */
 .logo-container {
     display: flex;
     justify-content: flex-end;
@@ -56,12 +54,13 @@ st.markdown("""
 /* Remove any extra padding on left column */
 .stColumn:first-child {
     padding-left: 0 !important;
+    padding-right: 0.5rem !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# Header: Title (left), Navigation (center), Logo (right)
-col_title, col_nav, col_logo = st.columns([1.2, 2.8, 1])
+# Adjust column ratios: give more width to left column for title
+col_title, col_nav, col_logo = st.columns([1.6, 2.4, 1])
 
 with col_title:
     st.markdown('<div class="title-section">', unsafe_allow_html=True)
