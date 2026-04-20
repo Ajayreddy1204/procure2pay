@@ -140,7 +140,6 @@ def render_genie():
         st.session_state.selected_analysis = "custom"
         st.session_state.last_custom_query = auto_query
         with st.spinner("Running analysis..."):
-            # Check if it's a quick analysis
             if auto_query in quick_map:
                 result = run_quick_analysis(quick_map[auto_query])
             else:
@@ -151,7 +150,6 @@ def render_genie():
                 st.session_state.genie_messages.append({"role": "assistant", "content": "Analysis complete.", "response": result, "timestamp": datetime.now()})
                 save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", auto_query)
                 st.session_state.genie_turn_index += 1
-                # Convert sql_used to JSON string if it's a dict
                 sql_used_val = result.get("sql", "")
                 if isinstance(sql_used_val, dict):
                     sql_used_val = json.dumps(sql_used_val)
@@ -259,7 +257,24 @@ def render_genie():
                         monthly_df = resp.get("monthly_df")
                         if monthly_df is not None and not monthly_df.empty:
                             st.subheader("Spending Trends")
-                            alt_line_monthly(monthly_df.rename(columns={"MONTH":"MONTH", "MONTHLY_SPEND":"VALUE"}), month_col="MONTH", value_col="VALUE", height=200)
+                            # ----- FIX: dynamic column detection -----
+                            month_candidates = ['MONTH', 'month', 'Month', 'month_str', 'MONTH_STR']
+                            value_candidates = ['MONTHLY_SPEND', 'monthly_spend', 'VALUE', 'value', 'AVG_DAYS', 'SPEND']
+                            month_col = None
+                            value_col = None
+                            for col in month_candidates:
+                                if col in monthly_df.columns:
+                                    month_col = col
+                                    break
+                            for col in value_candidates:
+                                if col in monthly_df.columns:
+                                    value_col = col
+                                    break
+                            if month_col and value_col:
+                                plot_df = monthly_df.rename(columns={month_col: "MONTH", value_col: "VALUE"})
+                                alt_line_monthly(plot_df, month_col="MONTH", value_col="VALUE", height=200)
+                            else:
+                                st.dataframe(monthly_df, use_container_width=True)
                         vendors_df = resp.get("vendors_df")
                         if vendors_df is not None and not vendors_df.empty:
                             st.subheader("Top Vendors")
@@ -313,7 +328,6 @@ def render_genie():
                         st.session_state.genie_messages.append({"role": "assistant", "content": "Answer from cache.", "response": cached, "timestamp": datetime.now()})
                         save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
                         st.session_state.genie_turn_index += 1
-                        # Convert sql_used to JSON string if needed
                         sql_used_val = cached.get("sql", "") if isinstance(cached, dict) else ""
                         if isinstance(sql_used_val, dict):
                             sql_used_val = json.dumps(sql_used_val)
@@ -321,7 +335,6 @@ def render_genie():
                         st.session_state.genie_turn_index += 1
                         save_question(user_question, "custom")
                     else:
-                        # Check if it matches a quick analysis title
                         if user_question in quick_map:
                             result = run_quick_analysis(quick_map[user_question])
                         else:
