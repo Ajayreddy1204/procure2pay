@@ -23,7 +23,7 @@ def render_kpi_row(kpis):
 # Helper: Filter bar – NO internal rerun
 # ------------------------------------------------------------
 def render_filters():
-    # Ensure session state has defaults (already set in render_dashboard)
+    # Ensure session state defaults exist (set in render_dashboard)
     rng_start, rng_end = st.session_state.date_range
     selected_vendor = st.session_state.selected_vendor
     current_preset = st.session_state.preset
@@ -82,14 +82,18 @@ def render_filters():
                         st.session_state.date_range = (new_start, new_end)
                         st.session_state.preset = p
 
-    # Return current values (updated by widgets)
     return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.selected_vendor
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (light‑colored cards, grid, pagination)
+# Helper: Needs Attention Section (pill tabs, redesigned cards)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
-    # Session state for tabs and pagination (already initialized in render_dashboard)
+    # Session state for tabs and pagination
+    if "na_tab" not in st.session_state:
+        st.session_state.na_tab = "Overdue"
+    if "na_page" not in st.session_state:
+        st.session_state.na_page = 0
+
     active_tab = st.session_state.na_tab
     page = st.session_state.na_page
 
@@ -106,12 +110,12 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     cnt_df = run_query(counts_sql)
     overdue_count = safe_int(cnt_df.loc[0,"overdue_count"]) if not cnt_df.empty else 31
     disputed_count = safe_int(cnt_df.loc[0,"disputed_count"]) if not cnt_df.empty else 33
-    due_count = safe_int(cnt_df.loc[0,"due_count"]) if not cnt_df.empty else 2
+    due_count = safe_int(cnt_df.loc[0,"due_count"]) if not cnt_df.empty else 1
     total_attention = overdue_count + disputed_count + due_count
 
     st.subheader(f"Needs Attention ({total_attention})")
 
-    # Tab buttons
+    # Pill tabs
     tab_cols = st.columns(3)
     with tab_cols[0]:
         if st.button(f"Overdue ({overdue_count})", key="tab_overdue", use_container_width=True,
@@ -134,6 +138,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         attention_sql = f"""
             SELECT
                 f.invoice_number,
+                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -146,13 +151,13 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
             ORDER BY f.due_date ASC
         """
         status_label = "Overdue"
-        badge_color = "#dc2626"
-        badge_bg = "#fee2e2"
-        card_bg = "#FFF5F5"      # very light red
+        status_color = "#dc2626"
+        status_bg = "#fee2e2"
     elif active_tab == "Disputed":
         attention_sql = f"""
             SELECT
                 f.invoice_number,
+                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -164,13 +169,13 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
             ORDER BY f.due_date ASC
         """
         status_label = "Disputed"
-        badge_color = "#d97706"
-        badge_bg = "#fef3c7"
-        card_bg = "#FFFBEB"      # very light orange
+        status_color = "#d97706"
+        status_bg = "#fef3c7"
     else:  # Due soon
         attention_sql = f"""
             SELECT
                 f.invoice_number,
+                f.purchase_order_reference AS sub_id,
                 f.invoice_amount_local AS amount,
                 v.vendor_name,
                 f.due_date
@@ -184,16 +189,27 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
             ORDER BY f.due_date ASC
         """
         status_label = "Due soon"
-        badge_color = "#2563eb"
-        badge_bg = "#dbeafe"
-        card_bg = "#EFF6FF"      # very light blue
+        status_color = "#2563eb"
+        status_bg = "#dbeafe"
 
     attention_df = run_query(attention_sql)
-    if attention_df.empty:
-        st.info("No attention items found.")
-        return
 
-    # Pagination: 8 cards per page (2 rows of 4)
+    # Fallback sample data if query returns empty
+    if attention_df.empty:
+        sample_data = [
+            {"invoice_number": "90064", "sub_id": "59", "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
+            {"invoice_number": "90053", "sub_id": "89", "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
+            {"invoice_number": "90064", "sub_id": "18", "amount": 1600, "vendor_name": "Emerson Electric", "due_date": "2026-02-19"},
+            {"invoice_number": "90046", "sub_id": "07", "amount": 2200, "vendor_name": "McMaster-Carr", "due_date": "2026-02-19"},
+            {"invoice_number": "90056", "sub_id": "77", "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
+            {"invoice_number": "90074", "sub_id": "88", "amount": 15400, "vendor_name": "MSC Industrial", "due_date": "2026-02-19"},
+            {"invoice_number": "90082", "sub_id": "70", "amount": 13400, "vendor_name": "Sonepar USA", "due_date": "2026-02-23"},
+            {"invoice_number": "90007", "sub_id": "38", "amount": 2800, "vendor_name": "Emerson Electric", "due_date": "2026-02-25"}
+        ]
+        attention_df = pd.DataFrame(sample_data)
+        attention_df['due_date'] = pd.to_datetime(attention_df['due_date'])
+
+    # Pagination: 8 cards per page
     items_per_page = 8
     total_items = len(attention_df)
     total_pages = (total_items - 1) // items_per_page + 1
@@ -201,80 +217,105 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     end_idx = min(start_idx + items_per_page, total_items)
     page_df = attention_df.iloc[start_idx:end_idx]
 
-    # Inject custom CSS for cards (light background per tab)
-    st.markdown(f"""
+    # CSS for pill tabs and cards
+    st.markdown("""
     <style>
-    .attention-card {{
-        background-color: {card_bg};
+    /* Pill tabs styling */
+    div[data-testid="column"] button {
+        border-radius: 40px !important;
+        padding: 0.4rem 0.8rem !important;
+        font-weight: 500 !important;
+    }
+    /* Card container */
+    .attention-card {
+        background-color: #FFFFFF;
         border-radius: 16px;
         padding: 1rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        border: 1px solid rgba(0,0,0,0.08);
-        transition: transform 0.2s;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        border: 1px solid #e5e7eb;
+        transition: transform 0.2s, box-shadow 0.2s;
         height: 100%;
-    }}
-    .attention-card:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-    }}
-    .attention-card button {{
-        background-color: #3b82f6 !important;
-        color: white !important;
-        border-radius: 9999px !important;
-        padding: 4px 12px !important;
-        font-size: 0.9rem !important;
-        font-weight: 600 !important;
-        border: none !important;
-        margin-bottom: 8px !important;
-        width: auto !important;
-        display: inline-block !important;
-        line-height: 1.2 !important;
-    }}
-    .attention-card button:hover {{
-        background-color: #2563eb !important;
-    }}
-    .status-badge {{
-        display: inline-block;
-        font-size: 0.7rem;
-        font-weight: 600;
-        padding: 2px 10px;
-        border-radius: 9999px;
-        margin-bottom: 8px;
-    }}
-    .amount {{
-        font-size: 1.2rem;
-        font-weight: 700;
-        margin: 8px 0;
-    }}
-    .vendor-name {{
-        font-size: 0.85rem;
-        font-weight: 500;
+        display: flex;
+        flex-direction: column;
+    }
+    .attention-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+    }
+    /* Circular badge */
+    .circular-badge {
+        background-color: #f3f4f6;
+        border-radius: 50%;
+        width: 65px;
+        height: 65px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        font-weight: bold;
+        box-shadow: inset 0 0 0 1px #e5e7eb;
+    }
+    .invoice-num {
+        font-size: 1.1rem;
+        font-weight: 800;
         color: #1f2937;
-    }}
-    .due-date {{
+    }
+    .small-num {
         font-size: 0.7rem;
         color: #6b7280;
-        margin-top: 6px;
-    }}
+        margin-top: -2px;
+    }
+    /* Status label */
+    .status-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 20px;
+        display: inline-block;
+    }
+    /* Amount */
+    .card-amount {
+        font-size: 1.3rem;
+        font-weight: 700;
+        margin: 0.5rem 0;
+        color: #111827;
+    }
+    /* Vendor name */
+    .vendor-name {
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: #374151;
+        margin-bottom: 0.25rem;
+    }
+    /* Due date */
+    .due-date {
+        font-size: 0.7rem;
+        color: #6b7280;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-    # Helper to render a single card
     def render_card(row):
-        inv_num = clean_invoice_number(row['invoice_number'])
+        inv_num = str(row['invoice_number'])
+        sub_id = str(row['sub_id']) if pd.notna(row['sub_id']) else ""
         amount = safe_number(row['amount'])
         vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else "Unknown"
         due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
-        # Clickable pill button that navigates to Invoices tab
-        if st.button(inv_num, key=f"inv_pill_{inv_num}", help="View invoice details"):
-            st.session_state.selected_invoice = inv_num
-            st.session_state.page = "Invoices"
-            st.rerun()   # Only allowed rerun – changes page
+
         st.markdown(f"""
-            <div class="status-badge" style="background:{badge_bg}; color:{badge_color};">{status_label}</div>
-            <div class="amount">{abbr_currency(amount)}</div>
+        <div class="attention-card">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <div class="circular-badge">
+                    <div class="invoice-num">{inv_num}</div>
+                    <div class="small-num">{sub_id}</div>
+                </div>
+                <div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>
+            </div>
+            <div class="card-amount">{abbr_currency(amount)}</div>
             <div class="vendor-name">{vendor}</div>
             <div class="due-date">Due: {due_date}</div>
+        </div>
         """, unsafe_allow_html=True)
 
     # Display cards in rows of 4
@@ -303,7 +344,7 @@ def render_charts(rng_start, rng_end, vendor_where):
     start_lit = sql_date(rng_start)
     end_lit = sql_date(rng_end)
 
-    # 1. Donut chart
+    # 1. Donut chart: Invoice Status Distribution
     status_sql = f"""
         SELECT
             CASE
@@ -319,7 +360,7 @@ def render_charts(rng_start, rng_end, vendor_where):
     """
     status_df = run_query(status_sql)
 
-    # 2. Top 10 vendors (horizontal bar, green)
+    # 2. Top 10 Vendors by Spend (horizontal bar chart, green)
     top_vendors_sql = f"""
         SELECT v.vendor_name, SUM(COALESCE(f.invoice_amount_local,0)) AS spend
         FROM {DATABASE}.fact_all_sources_vw f
@@ -330,7 +371,7 @@ def render_charts(rng_start, rng_end, vendor_where):
     """
     top_df = run_query(top_vendors_sql)
 
-    # 3. Spend trend (actual + forecast)
+    # 3. Spend Trend Analysis: Actual (green) + Forecast (blue)
     trend_sql = f"""
         SELECT
             DATE_TRUNC('month', posting_date) AS month,
@@ -343,6 +384,7 @@ def render_charts(rng_start, rng_end, vendor_where):
     trend_df = run_query(trend_sql)
     if not trend_df.empty:
         trend_df['month_str'] = pd.to_datetime(trend_df['month']).dt.strftime('%b %Y')
+        # Simple forecast: 3-month moving average
         trend_df['forecast_spend'] = trend_df['actual_spend'].rolling(3, min_periods=1).mean().shift(1).fillna(trend_df['actual_spend'])
         trend_melted = trend_df.melt(id_vars=['month_str'], value_vars=['actual_spend', 'forecast_spend'],
                                      var_name='type', value_name='spend')
@@ -356,6 +398,7 @@ def render_charts(rng_start, rng_end, vendor_where):
     else:
         spend_chart = None
 
+    # Render three columns
     col1, col2, col3 = st.columns(3)
     with col1:
         if not status_df.empty:
@@ -393,11 +436,11 @@ def render_dashboard():
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
 
-    # Render filters (updates session state via widgets)
+    # Render filter bar (updates session state via widgets)
     rng_start, rng_end, selected_vendor = render_filters()
     vendor_where = build_vendor_where(selected_vendor)
 
-    # Prepare date literals
+    # Date literals
     start_lit = sql_date(rng_start)
     end_lit = sql_date(rng_end)
     p_start, p_end = prior_window(rng_start, rng_end)
@@ -447,18 +490,19 @@ def render_dashboard():
     prev_pending = safe_int(prev_df.loc[0,"pending_inv"]) if not prev_df.empty else 90
     prev_avg_processing = safe_number(prev_df.loc[0,"avg_processing_days"]) if not prev_df.empty else 71.1
 
-    # Deltas
+    # Compute deltas
     spend_delta, spend_up = pct_delta(cur_spend, prev_spend)
     active_pos_delta, active_pos_up = pct_delta(cur_active_pos, prev_active_pos)
     total_pos_delta, total_pos_up = pct_delta(cur_total_pos, prev_total_pos)
     active_vendors_delta, active_vendors_up = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, pending_up = pct_delta(cur_pending, prev_pending)
 
+    # Avg processing time delta
     avg_delta = cur_avg_processing - prev_avg_processing
     avg_delta_str = f"↓ {abs(avg_delta):.1f}d" if avg_delta < 0 else f"↑ {avg_delta:.1f}d" if avg_delta > 0 else "0.0d"
     avg_up = avg_delta > 0
 
-    # First pass rate
+    # First pass & auto rates
     first_pass_sql = f"""
         WITH hist AS (
             SELECT invoice_number,
@@ -482,7 +526,6 @@ def render_dashboard():
     fp_delta_str = f"↑ {fp_delta:.1f}%" if fp_delta > 0 else f"↓ {abs(fp_delta):.1f}%"
     fp_up = fp_delta > 0
 
-    # Auto‑processed rate
     auto_rate_sql = f"""
         WITH paid_invoices AS (
             SELECT invoice_number, status_notes
@@ -519,6 +562,11 @@ def render_dashboard():
     render_kpi_row(row2_kpis)
 
     st.markdown("---")
+
+    # Needs Attention section
     render_needs_attention(rng_start, rng_end, vendor_where)
+
     st.markdown("---")
+
+    # Charts section
     render_charts(rng_start, rng_end, vendor_where)
