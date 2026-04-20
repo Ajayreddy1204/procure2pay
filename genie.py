@@ -131,7 +131,8 @@ def render_quick_analysis_response(result: dict):
                 if "LATE_PAYMENTS" in monthly_df.columns and "TOTAL_PAYMENTS" in monthly_df.columns:
                     monthly_df["LATE_PCT"] = (monthly_df["LATE_PAYMENTS"] / monthly_df["TOTAL_PAYMENTS"]) * 100
                     late_df = monthly_df[["MONTH_STR", "LATE_PCT"]].rename(columns={"LATE_PCT": "VALUE"})
-                    alt_line_monthly(late_df, month_col="MONTH_STR", value_col="VALUE", height=250, title="Late Payments (%)", color="#ef4444")
+                    # Removed unsupported 'color' argument
+                    alt_line_monthly(late_df, month_col="MONTH_STR", value_col="VALUE", height=250, title="Late Payments (%)")
 
     elif analysis_type == "invoice_aging":
         if vendors_df is not None and not vendors_df.empty:
