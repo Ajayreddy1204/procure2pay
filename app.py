@@ -29,6 +29,21 @@ st.set_page_config(
     page_icon=":bar_chart:",
 )
 
+# ---------------------------- Query parameter handling for navigation ----------------------------
+# Parse URL parameters (e.g., ?page=Invoices&search_invoice=9001767)
+query_params = st.query_params
+if "page" in query_params:
+    st.session_state.page = query_params["page"]
+if "search_invoice" in query_params:
+    # Clean and store the invoice number for the Invoices page
+    inv_num = clean_invoice_number(query_params["search_invoice"])
+    st.session_state.inv_search_q = inv_num
+    st.session_state.invoice_search_term = inv_num
+    # Reset status filter to show all results for the search
+    st.session_state.invoice_status_filter = "All Status"
+# Remove query params so they don't persist on subsequent reruns
+st.query_params.clear()
+
 # ---------------------------- Athena configuration ----------------------------
 DATABASE = "procure2pay"
 ATHENA_REGION = "us-east-1"
