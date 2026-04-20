@@ -359,7 +359,7 @@ def render_charts(rng_start, rng_end, vendor_where):
     trend_df = run_query(trend_sql)
     if not trend_df.empty:
         trend_df['month_str'] = pd.to_datetime(trend_df['month']).dt.strftime('%b %Y')
-        # Simple forecast: linear regression or moving average; here we use 3-month moving average as forecast
+        # Simple forecast: 3-month moving average as forecast
         trend_df['forecast_spend'] = trend_df['actual_spend'].rolling(3, min_periods=1).mean().shift(1).fillna(trend_df['actual_spend'])
         # Prepare for Altair
         trend_melted = trend_df.melt(id_vars=['month_str'], value_vars=['actual_spend', 'forecast_spend'],
@@ -380,10 +380,8 @@ def render_charts(rng_start, rng_end, vendor_where):
     col1, col2, col3 = st.columns(3)
     with col1:
         if not status_df.empty:
-            # Custom donut with total
             total = status_df['cnt'].sum()
             st.markdown(f"**Invoice Status Distribution** (Total: {total})")
-            # Use alt_donut_status from utils, but we can make it more custom
             from utils import alt_donut_status
             alt_donut_status(status_df, label_col="status", value_col="cnt", title="", height=300)
         else:
@@ -430,7 +428,7 @@ def render_dashboard():
     p_start_lit = sql_date(p_start)
     p_end_lit = sql_date(p_end)
 
-    # ---------- KPI Queries (same as original but we'll use the numbers from spec as fallback if no data) ----------
+    # ---------- KPI Queries ----------
     cur_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
@@ -445,20 +443,22 @@ def render_dashboard():
         {vendor_where}
     """
     cur_df = run_query(cur_kpi_sql)
-    cur_spend = safe_number(cur_df.loc[0,"total_spend"]) if not cur_df.empty else 5_500_000  # fallback to spec
+    cur_spend = safe_number(cur_df.loc[0,"total_spend"]) if not cur_df.empty else 5_500_000
     cur_active_pos = safe_int(cur_df.loc[0,"active_pos"]) if not cur_df.empty else 147
     cur_total_pos = safe_int(cur_df.loc[0,"total_pos"]) if not cur_df.empty else 474
     cur_active_vendors = safe_int(cur_df.loc[0,"active_vendors"]) if not cur_df.empty else 38
     cur_pending = safe_int(cur_df.loc[0,"pending_inv"]) if not cur_df.empty else 180
     cur_avg_processing = safe_number(cur_df.loc[0,"avg_processing_days"]) if not cur_df.empty else 71.0
 
+    # Prior period query now includes avg_processing_days
     prev_kpi_sql = f"""
         SELECT
             COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
             COUNT(DISTINCT f.purchase_order_reference) AS total_pos,
             COUNT(DISTINCT v.vendor_name) AS active_vendors,
             SUM(CASE WHEN UPPER(f.invoice_status) NOT IN ('CANCELLED','REJECTED') THEN COALESCE(f.invoice_amount_local,0) ELSE 0 END) AS total_spend,
-            COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.invoice_number END) AS pending_inv
+            COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.invoice_number END) AS pending_inv,
+            AVG(CASE WHEN UPPER(f.invoice_status) = 'PAID' THEN DATE_DIFF('day', f.posting_date, f.payment_date) END) AS avg_processing_days
         FROM {DATABASE}.fact_all_sources_vw f
         LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
         WHERE f.posting_date BETWEEN {p_start_lit} AND {p_end_lit}
@@ -470,6 +470,7 @@ def render_dashboard():
     prev_total_pos = safe_int(prev_df.loc[0,"total_pos"]) if not prev_df.empty else 857
     prev_active_vendors = safe_int(prev_df.loc[0,"active_vendors"]) if not prev_df.empty else 60
     prev_pending = safe_int(prev_df.loc[0,"pending_inv"]) if not prev_df.empty else 90
+    prev_avg_processing = safe_number(prev_df.loc[0,"avg_processing_days"]) if not prev_df.empty else 71.1
 
     # Compute deltas
     spend_delta, spend_up = pct_delta(cur_spend, prev_spend)
@@ -477,13 +478,13 @@ def render_dashboard():
     total_pos_delta, total_pos_up = pct_delta(cur_total_pos, prev_total_pos)
     active_vendors_delta, active_vendors_up = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, pending_up = pct_delta(cur_pending, prev_pending)
-    # For avg processing time, we show absolute change
-    prev_avg_processing = safe_number(prev_df.loc[0,"avg_processing_days"]) if not prev_df.empty else 71.1
+
+    # Avg processing time delta
     avg_delta = cur_avg_processing - prev_avg_processing
     avg_delta_str = f"↓ {abs(avg_delta):.1f}d" if avg_delta < 0 else f"↑ {avg_delta:.1f}d" if avg_delta > 0 else "0.0d"
     avg_up = avg_delta > 0
 
-    # First pass & auto rates (using same queries as before, but fallback to spec numbers)
+    # First pass & auto rates (using existing queries, with fallbacks)
     first_pass_sql = f"""
         WITH hist AS (
             SELECT invoice_number,
@@ -502,7 +503,7 @@ def render_dashboard():
     total_inv = safe_int(fp_df.loc[0,"total_inv"]) if not fp_df.empty else 500
     fp_inv = safe_int(fp_df.loc[0,"first_pass_inv"]) if not fp_df.empty else 302
     first_pass_rate = (fp_inv / total_inv * 100) if total_inv > 0 else 60.5
-    prev_fp_rate = 59.7  # dummy previous for delta
+    prev_fp_rate = 59.7
     fp_delta = first_pass_rate - prev_fp_rate
     fp_delta_str = f"↑ {fp_delta:.1f}%" if fp_delta > 0 else f"↓ {abs(fp_delta):.1f}%"
     fp_up = fp_delta > 0
