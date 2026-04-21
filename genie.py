@@ -317,7 +317,6 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
 # GR/IR Clearing Playbook handlers
 # ------------------------------------------------------------
 def process_grir_hotspots(question: str) -> dict:
-    """Identify top GR/IR hotspots by month"""
     sql = f"""
         SELECT
             year,
@@ -331,7 +330,6 @@ def process_grir_hotspots(question: str) -> dict:
     if df.empty:
         return {"layout": "error", "message": "No GR/IR outstanding balance data found."}
     df.columns = [c.lower() for c in df.columns]
-    # Calculate rank
     df['balance_rank'] = df['total_grir_balance'].rank(ascending=False, method='dense').astype(int)
     data_preview = df.head(12).to_string(index=False)
     prompt = f"""
@@ -357,8 +355,6 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     }
 
 def process_grir_root_causes(question: str) -> dict:
-    """Explain likely root causes and remediation actions"""
-    # We'll use aging data to infer root causes
     aging_sql = f"""
         SELECT
             year,
@@ -382,7 +378,6 @@ def process_grir_root_causes(question: str) -> dict:
     balance_df = run_query(balance_sql)
     if aging_df.empty and balance_df.empty:
         return {"layout": "error", "message": "No GR/IR aging or balance data found."}
-    # Combine for context
     context = "GR/IR aging (last 6 months):\n" + aging_df.to_string(index=False) + "\n\nOutstanding balances:\n" + balance_df.to_string(index=False)
     prompt = f"""
 You are a senior procurement analyst. Based on the following GR/IR data (aging and outstanding balances), write a response with two sections:
@@ -408,7 +403,6 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     }
 
 def process_grir_working_capital(question: str) -> dict:
-    """Quantify working capital benefit from clearing old GR/IR"""
     sql = f"""
         SELECT
             year,
@@ -452,8 +446,6 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     }
 
 def process_grir_vendor_followup(question: str) -> dict:
-    """Draft vendor follow-up messages for top GR/IR items"""
-    # Get top GR/IR items by vendor (using fact table or view)
     sql = f"""
         SELECT
             v.vendor_name,
@@ -517,7 +509,7 @@ def process_custom_query(query: str) -> dict:
     }
 
 # ------------------------------------------------------------
-# Rendering functions for each layout type (unchanged)
+# Rendering functions for each layout type
 # ------------------------------------------------------------
 def render_cash_flow_response(result: dict):
     df = pd.DataFrame(result["df"])
@@ -811,7 +803,7 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
             st.code(result["sql"], language="sql")
 
 # ------------------------------------------------------------
-# Main Genie render function – redesigned UI
+# Main Genie render function – redesigned UI with working input
 # ------------------------------------------------------------
 def render_genie():
     # CSS for the new layout
@@ -1022,12 +1014,10 @@ def render_genie():
                 "which invoices should we pay early to capture discounts"
             ]
             st.markdown("**Click a chip to fill the input:**")
-            chip_html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
             for chip in suggestions:
-                chip_html += f'<div class="suggestion-chip" onclick="document.querySelector(\'input[type=text]\').value = \'{chip}\';">{chip}</div>'
-            chip_html += '</div>'
-            st.markdown(chip_html, unsafe_allow_html=True)
-
+                if st.button(chip, key=f"chip_{chip[:20]}", use_container_width=True):
+                    st.session_state.genie_prefill = chip
+                    st.rerun()
             faqs = get_frequent_questions_by_user_cached(5)
             if faqs:
                 st.markdown("---")
@@ -1107,13 +1097,15 @@ def render_genie():
                         st.error(resp.get("message", "Unknown error"))
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Input form
+        # Input form – fixed to work correctly
         with st.form(key="genie_form", clear_on_submit=True):
             col_input, col_btn = st.columns([0.85, 0.15])
             with col_input:
+                # Get the prefill value and then clear it so it doesn't persist
+                prefill_value = st.session_state.pop("genie_prefill", "")
                 user_question = st.text_input(
                     "Ask a question",
-                    value=st.session_state.pop("genie_prefill", ""),
+                    value=prefill_value,
                     placeholder="e.g., Show me total spend YTD",
                     label_visibility="collapsed"
                 )
