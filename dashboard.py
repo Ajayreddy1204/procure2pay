@@ -173,17 +173,35 @@ def inject_dashboard_css():
         color: #6b7280;
         font-size: 0.9rem;
     }
-    /* Clickable Card Link - makes whole card clickable */
-    .clickable-card-link {
-        text-decoration: none;
-        color: inherit;
-        display: block;
-        cursor: pointer;
+    /* Circle Button Styling */
+    .circle-invoice-btn button {
+        background: #d1d5db !important;
+        border-radius: 50% !important;
+        width: 70px !important;
+        height: 70px !important;
+        padding: 0 !important;
+        border: none !important;
+        font-weight: 700 !important;
+        color: #111827 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: center !important;
+        align-items: center !important;
+        line-height: 1.2 !important;
+        white-space: pre-line !important;
+        cursor: pointer !important;
     }
-    .clickable-card-link:hover {
-        opacity: 0.95;
-        transform: scale(1.01);
-        transition: all 0.2s ease;
+    .circle-invoice-btn button:hover {
+        background: #9ca3af !important;
+        transform: scale(1.05);
+    }
+    /* Selected circle (blue) */
+    .circle-invoice-btn-selected button {
+        background: #3b82f6 !important;
+        color: white !important;
+    }
+    .circle-invoice-btn-selected button:hover {
+        background: #2563eb !important;
     }
 </style>
 """,
@@ -394,17 +412,17 @@ def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, star
 
 
 # ------------------------------------------------------------
-# Helper: Navigate to Invoices Tab (plural)
+# Helper: Navigate to Invoices Tab
 # ------------------------------------------------------------
 def navigate_to_invoice(invoice_number):
     """Set session state to navigate to the Invoices tab with a specific invoice."""
     st.session_state.search_invoice_number = format_invoice_number(invoice_number)
-    st.session_state.active_tab = "Invoices"   # plural, matches the tab name
+    st.session_state.active_tab = "Invoices"
     st.rerun()
 
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section with Clickable Cards
+# Helper: Needs Attention Section with Clickable Circle Buttons
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     if "na_tab" not in st.session_state:
@@ -599,33 +617,29 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
 
                 # Determine if this invoice is selected
                 is_selected = st.session_state.selected_invoice == inv_num
-
-                # Circle button styling - blue if selected, gray otherwise
-                circle_bg = "#3b82f6" if is_selected else "#d1d5db"
-                text_color_top = "white" if is_selected else "#111827"
-                text_color_bottom = "white" if is_selected else "#6b7280"
+                circle_class = "circle-invoice-btn-selected" if is_selected else "circle-invoice-btn"
 
                 with cols[col_idx]:
-                    # Make the whole card clickable using an <a> tag that sets a query parameter
-                    # The main app will read ?invoice=... and set active_tab = "Invoices"
-                    click_url = f"?invoice={inv_num}"
+                    # Card container with background
                     st.markdown(
                         f"""
-<a href="{click_url}" class="clickable-card-link" title="{inv_num}">
-<div class="invoice-card {card_class}" style="background: {'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border: 1px solid #fecaca' if status_label == 'Overdue' else 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border: 1px solid #fde68a' if status_label == 'Disputed' else 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border: 1px solid #bfdbfe'};">
+<div class="invoice-card {card_class}">
 <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-<div style="
-    background: {circle_bg};
-    border-radius: 50%;
-    width: 70px;
-    height: 70px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-">
-<div style="font-size: 1rem; font-weight: 700; color: {text_color_top}; line-height: 1.2;">{inv_top}</div>
-<div style="font-size: 1.2rem; font-weight: 700; color: {text_color_bottom}; line-height: 1.2;">{inv_bottom}</div>
+<div class="{circle_class}">
+""",
+                        unsafe_allow_html=True,
+                    )
+                    # The clickable circle button
+                    button_label = f"{inv_top}\n{inv_bottom}" if inv_bottom else inv_top
+                    if st.button(
+                        button_label,
+                        key=f"inv_btn_{page}_{item_idx}_{inv_num}",
+                        help=f"{inv_num}",  # Tooltip shows invoice number
+                        use_container_width=False,
+                    ):
+                        navigate_to_invoice(inv_num)
+                    st.markdown(
+                        f"""
 </div>
 <div style="text-align: right;">
 <span class="invoice-status {status_class}">{status_label}</span>
@@ -637,7 +651,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
 <div class="invoice-vendor">{vendor}</div>
 </div>
 </div>
-</a>
 """,
                         unsafe_allow_html=True,
                     )
@@ -870,16 +883,6 @@ def render_dashboard():
         st.session_state.na_page = 0
     if "selected_invoice" not in st.session_state:
         st.session_state.selected_invoice = None
-
-    # Check for invoice query parameter (from clickable cards) - using experimental API for older Streamlit
-    query_params = st.experimental_get_query_params()
-    if "invoice" in query_params:
-        invoice_num = query_params["invoice"][0]  # returns a list
-        st.session_state.search_invoice_number = format_invoice_number(invoice_num)
-        st.session_state.active_tab = "Invoices"
-        # Clear query param to avoid repeated navigation
-        st.experimental_set_query_params()
-        st.rerun()
 
     # Render filter bar
     rng_start, rng_end, selected_vendor = render_filters()
