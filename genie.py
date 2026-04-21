@@ -803,17 +803,17 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
             st.code(result["sql"], language="sql")
 
 # ------------------------------------------------------------
-# Main Genie render function – redesigned UI with working input
+# Main Genie render function – redesigned UI with square cards
 # ------------------------------------------------------------
 def render_genie():
-    # CSS for the new layout
+    # CSS for square cards + overall layout
     st.markdown("""
     <style>
-    /* Cards */
+    /* Square cards with 1:1 aspect ratio */
     .genie-card {
         background: white;
         border-radius: 20px;
-        padding: 1.5rem;
+        padding: 1rem;
         box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         transition: transform 0.2s ease, box-shadow 0.2s ease;
         height: 100%;
@@ -821,27 +821,43 @@ def render_genie():
         flex-direction: column;
         justify-content: space-between;
         border: 1px solid #eef2f6;
+        aspect-ratio: 1 / 1;   /* forces square shape */
+        width: 100%;
     }
     .genie-card:hover {
         transform: translateY(-4px);
         box-shadow: 0 12px 24px rgba(0,0,0,0.12);
     }
     .genie-card h3 {
-        font-size: 1.25rem;
+        font-size: 1.2rem;
         font-weight: 600;
-        margin: 0.5rem 0;
+        margin: 0.5rem 0 0.25rem;
         color: #1e293b;
     }
     .genie-card p {
         color: #475569;
-        font-size: 0.875rem;
-        line-height: 1.5;
-        margin-bottom: 1.5rem;
+        font-size: 0.8rem;
+        line-height: 1.4;
+        margin-bottom: 1rem;
     }
     .card-icon {
-        font-size: 2rem;
+        font-size: 2.2rem;
         text-align: center;
         margin-bottom: 0.5rem;
+    }
+    /* Ensure buttons inside cards are properly sized */
+    .genie-card .stButton button {
+        margin-top: auto;
+        width: 100%;
+        background-color: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 30px;
+        padding: 0.4rem;
+        font-weight: 500;
+    }
+    .genie-card .stButton button:hover {
+        background-color: #2563eb;
     }
     /* Suggestion chips */
     .suggestion-chip {
@@ -966,7 +982,7 @@ def render_genie():
     st.markdown("## 🧞 Welcome to ProcureIQ Genie")
     st.markdown("Let Genie run one of these quick analyses for you")
 
-    # ----- QUICK ANALYSIS CARDS (4 columns) -----
+    # ----- QUICK ANALYSIS CARDS (4 columns) – SQUARE FORMAT -----
     col1, col2, col3, col4 = st.columns(4)
     cards = [
         ("💰", "Spending Overview", "Track total spend, monthly trends and major changes"),
@@ -1101,7 +1117,6 @@ def render_genie():
         with st.form(key="genie_form", clear_on_submit=True):
             col_input, col_btn = st.columns([0.85, 0.15])
             with col_input:
-                # Get the prefill value and then clear it so it doesn't persist
                 prefill_value = st.session_state.pop("genie_prefill", "")
                 user_question = st.text_input(
                     "Ask a question",
