@@ -517,7 +517,7 @@ def process_custom_query(query: str) -> dict:
     }
 
 # ------------------------------------------------------------
-# Rendering functions for each layout type
+# Rendering functions for each layout type (unchanged)
 # ------------------------------------------------------------
 def render_cash_flow_response(result: dict):
     df = pd.DataFrame(result["df"])
@@ -609,7 +609,6 @@ def render_grir_hotspots(result: dict):
         st.error("No GR/IR data.")
         return
     st.subheader("GR/IR Outstanding Balance by Month")
-    # Bar chart
     chart_df = df.head(12).copy()
     chart_df['year_month'] = chart_df['year'].astype(str) + '-' + chart_df['month'].astype(str).str.zfill(2)
     alt_bar(chart_df, x="year_month", y="total_grir_balance", title="Top months with highest GR/IR", horizontal=False, height=300, color="#ef4444")
@@ -663,9 +662,6 @@ def render_grir_vendor_followup(result: dict):
     with st.expander("View SQL used"):
         st.code(result["sql"], language="sql")
 
-# ------------------------------------------------------------
-# Enhanced render_quick_analysis_response – matches expected output
-# ------------------------------------------------------------
 def render_quick_analysis_response(result: dict):
     analysis_type = result.get("type", "spending_overview")
     metrics = result.get("metrics", {})
@@ -673,16 +669,14 @@ def render_quick_analysis_response(result: dict):
     monthly_df = result.get("monthly_df")
     vendors_df = result.get("vendors_df")
 
-    # ----- Metrics row with friendly labels -----
     if metrics:
         st.markdown("### 📊 Key Metrics")
-        # Map internal keys to display labels
         label_map = {
             "total_ytd": "Total Spend (YTD)",
             "mom_pct": "MoM Change",
             "top5_pct": "Top 5 Vendors",
             "qoq_pct": "QoQ Change",
-            "summary": "Summary"  # fallback
+            "summary": "Summary"
         }
         cols = st.columns(len(metrics))
         colors = ["#fef3c7", "#dbeafe", "#dcfce7", "#fce7f3", "#e0e7ff", "#fef9c3"]
@@ -705,13 +699,10 @@ def render_quick_analysis_response(result: dict):
                 </div>
                 """, unsafe_allow_html=True)
 
-    # ----- Anomaly warning -----
     if anomaly:
         st.warning(f"⚠️ **Anomaly Detected**\n\n{anomaly}")
 
-    # ----- Monthly charts for spending overview (three charts) -----
     if analysis_type == "spending_overview" and monthly_df is not None and not monthly_df.empty:
-        # Ensure column names are uppercase and create a month string column
         monthly_df.columns = [c.upper() for c in monthly_df.columns]
         if "MONTH" in monthly_df.columns:
             monthly_df = monthly_df.rename(columns={"MONTH": "MONTH_STR"})
@@ -732,14 +723,12 @@ def render_quick_analysis_response(result: dict):
                 vend_df = monthly_df[["MONTH_STR", "VENDOR_COUNT"]].rename(columns={"VENDOR_COUNT": "VALUE"})
                 alt_bar(vend_df, x="MONTH_STR", y="VALUE", title="Active Vendors", height=200, color="#10b981")
 
-    # ----- Top vendors (common to multiple analysis types) -----
     if vendors_df is not None and not vendors_df.empty:
         vendors_df.columns = [c.upper() for c in vendors_df.columns]
         if "VENDOR_NAME" in vendors_df.columns and "SPEND" in vendors_df.columns:
             st.subheader("Top 10 Vendors by Spend (YTD)")
             alt_bar(vendors_df.head(10), x="VENDOR_NAME", y="SPEND", horizontal=True, height=400, color="#22c55e")
 
-    # ----- Additional charts for other analysis types -----
     if analysis_type == "vendor_analysis" and vendors_df is not None and not vendors_df.empty:
         if "INVOICE_COUNT" in vendors_df.columns:
             st.subheader("Invoice Frequency by Vendor")
@@ -773,9 +762,7 @@ def render_quick_analysis_response(result: dict):
             st.subheader("Aging Distribution")
             alt_donut_status(vendors_df, label_col="AGING_BUCKET", value_col="CNT", title="Invoice Count by Age", height=300)
 
-    # ----- Prescriptive Insights (AI‑generated) -----
     if "analyst_response" not in result or not result["analyst_response"]:
-        # Build data preview for Bedrock
         monthly_preview = ""
         if monthly_df is not None:
             monthly_preview = monthly_df.head(6).to_string(index=False)
@@ -783,8 +770,6 @@ def render_quick_analysis_response(result: dict):
         if vendors_df is not None:
             vendors_preview = vendors_df.head(10).to_string(index=False)
         metrics_str = json.dumps({k: (float(v) if isinstance(v, (int, float)) else str(v)) for k, v in metrics.items()}, indent=2)
-
-        # Different prompts per analysis type
         analysis_prompts = {
             "spending_overview": "Focus on total spend, month‑over‑month changes, vendor concentration, and any anomalies. Provide actions to optimise spend.",
             "vendor_analysis": "Focus on vendor concentration (top vendors' share), over‑reliance risks, invoice frequency, and vendor performance. Suggest diversification and contingency plans.",
@@ -817,7 +802,6 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
 
-    # ----- Expandable SQL -----
     with st.expander("Query outputs"):
         sql_dict = result.get("sql", {})
         if sql_dict:
@@ -827,35 +811,64 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
             st.code(result["sql"], language="sql")
 
 # ------------------------------------------------------------
-# Main Genie render function (unchanged)
+# Main Genie render function – redesigned UI
 # ------------------------------------------------------------
 def render_genie():
+    # CSS for the new layout
     st.markdown("""
     <style>
+    /* Cards */
     .genie-card {
-        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        background: white;
         border-radius: 20px;
         padding: 1.5rem;
-        box-shadow: 0 8px 20px rgba(0,0,0,0.08);
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
         height: 100%;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        border: 1px solid rgba(203, 213, 225, 0.3);
+        border: 1px solid #eef2f6;
     }
     .genie-card:hover {
-        transform: translateY(-6px);
-        box-shadow: 0 20px 30px -12px rgba(0,0,0,0.15);
+        transform: translateY(-4px);
+        box-shadow: 0 12px 24px rgba(0,0,0,0.12);
     }
     .genie-card h3 {
-        font-size: 1.3rem;
-        font-weight: 700;
-        margin-bottom: 0.5rem;
-        background: linear-gradient(135deg, #1e293b, #334155);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin: 0.5rem 0;
+        color: #1e293b;
     }
+    .genie-card p {
+        color: #475569;
+        font-size: 0.875rem;
+        line-height: 1.5;
+        margin-bottom: 1.5rem;
+    }
+    .card-icon {
+        font-size: 2rem;
+        text-align: center;
+        margin-bottom: 0.5rem;
+    }
+    /* Suggestion chips */
+    .suggestion-chip {
+        background: #f1f5f9;
+        border-radius: 40px;
+        padding: 0.4rem 1rem;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: inline-block;
+        margin: 0.2rem;
+        border: 1px solid #e2e8f0;
+    }
+    .suggestion-chip:hover {
+        background: #3b82f6;
+        color: white;
+        border-color: #3b82f6;
+    }
+    /* Chat messages */
     .chat-message-user {
         background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
         color: white;
@@ -867,7 +880,7 @@ def render_genie():
         box-shadow: 0 2px 6px rgba(0,0,0,0.1);
     }
     .chat-message-assistant {
-        background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+        background: #f1f5f9;
         color: #0f172a;
         padding: 12px 18px;
         border-radius: 20px 20px 20px 4px;
@@ -877,10 +890,14 @@ def render_genie():
         box-shadow: 0 2px 6px rgba(0,0,0,0.05);
     }
     .chat-scrollable {
-        max-height: 500px;
+        max-height: 450px;
         overflow-y: auto;
         padding-right: 8px;
         margin-bottom: 1rem;
+    }
+    .centered-container {
+        text-align: center;
+        margin-bottom: 1.5rem;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -906,7 +923,7 @@ def render_genie():
         "Invoice Aging": "invoice_aging"
     }
 
-    # Process auto-run query from session state
+    # Process auto-run query from session state (set by card buttons)
     auto_query = st.session_state.pop("auto_run_query", None)
     if auto_query:
         st.session_state.genie_messages = []
@@ -915,31 +932,23 @@ def render_genie():
         st.session_state.last_custom_query = auto_query
         with st.spinner("Running analysis..."):
             lower_q = auto_query.lower()
-            # Cash flow
+            # Dispatch to appropriate handler
             if any(kw in lower_q for kw in ["forecast cash outflow", "cash flow forecast", "7, 14, 30, 60, 90"]):
                 result = process_cash_flow_forecast(auto_query)
-            # Early payment
             elif any(kw in lower_q for kw in ["pay early", "capture discounts", "early payment"]):
                 result = process_early_payment(auto_query)
-            # Payment timing
             elif any(kw in lower_q for kw in ["optimal payment timing", "payment timing strategy"]):
                 result = process_payment_timing(auto_query)
-            # Late payment trend
             elif any(kw in lower_q for kw in ["late payment trend", "late payment risk"]):
                 result = process_late_payment_trend(auto_query)
-            # GR/IR Hotspots
             elif "gr/ir outstanding balance by month" in lower_q or "hotspots" in lower_q:
                 result = process_grir_hotspots(auto_query)
-            # GR/IR Root causes
             elif "root-cause" in lower_q or "root causes" in lower_q or "explain likely gr/ir" in lower_q:
                 result = process_grir_root_causes(auto_query)
-            # GR/IR Working capital
             elif "working-capital" in lower_q or "working capital" in lower_q or "older than 60" in lower_q:
                 result = process_grir_working_capital(auto_query)
-            # GR/IR Vendor follow-up
             elif "vendor follow-up" in lower_q or "draft vendor" in lower_q or "follow-up messages" in lower_q:
                 result = process_grir_vendor_followup(auto_query)
-            # Quick analyses
             elif auto_query in quick_map:
                 result = run_quick_analysis(quick_map[auto_query])
             else:
@@ -961,37 +970,40 @@ def render_genie():
                 st.session_state.genie_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
         st.rerun()
 
-    # UI: Welcome and quick analysis cards
+    # ----- HEADER SECTION -----
     st.markdown("## 🧞 Welcome to ProcureIQ Genie")
-    st.markdown("Your AI‑powered procurement assistant. Choose a quick analysis or ask a custom question.")
+    st.markdown("Let Genie run one of these quick analyses for you")
 
-    cols = st.columns(4)
-    quick_options = {
-        "spending_overview": ("💰 Spending Overview", "Track total spend, monthly trends and major changes", "#3b82f6"),
-        "vendor_analysis": ("🏭 Vendor Analysis", "Understand vendor-wise spend, concentration, and dependency", "#8b5cf6"),
-        "payment_performance": ("⏱️ Payment Performance", "Identify delays, late payments, and cycle time issues", "#10b981"),
-        "invoice_aging": ("📅 Invoice Aging", "See overdue invoices, risk buckets, and problem areas", "#f59e0b")
-    }
-    for idx, (key, (title, desc, color)) in enumerate(quick_options.items()):
-        with cols[idx]:
-            with st.container():
-                st.markdown(f"""
-                <div class="genie-card" style="border-top: 4px solid {color};">
-                    <div>
-                        <h3>{title}</h3>
-                        <p>{desc}</p>
-                    </div>
+    # ----- QUICK ANALYSIS CARDS (4 columns) -----
+    col1, col2, col3, col4 = st.columns(4)
+    cards = [
+        ("💰", "Spending Overview", "Track total spend, monthly trends and major changes"),
+        ("🏭", "Vendor Analysis", "Understand vendor-wise spend, concentration, and dependency"),
+        ("⏱️", "Payment Performance", "Identify delays, late payments, and cycle time issues"),
+        ("📅", "Invoice Aging", "See overdue invoices, risk buckets, and problem areas")
+    ]
+    for col, (icon, title, desc) in zip([col1, col2, col3, col4], cards):
+        with col:
+            st.markdown(f"""
+            <div class="genie-card">
+                <div>
+                    <div class="card-icon">{icon}</div>
+                    <h3>{title}</h3>
+                    <p>{desc}</p>
                 </div>
-                """, unsafe_allow_html=True)
-                if st.button("Ask Genie", key=f"card_{key}", use_container_width=True):
-                    st.session_state.auto_run_query = title.split(" ", 1)[1]
-                    st.rerun()
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("Ask Genie", key=f"quick_card_{title.replace(' ', '_')}", use_container_width=True):
+                st.session_state.auto_run_query = title
+                st.rerun()
 
     st.markdown("---")
 
+    # ----- MAIN WORKSPACE (2 columns) -----
     left_col, right_col = st.columns([0.35, 0.65], gap="large")
 
     with left_col:
+        # Saved insights
         with st.expander("📌 Saved insights", expanded=False):
             insights = get_saved_insights_cached(page="genie")
             if insights:
@@ -1002,17 +1014,20 @@ def render_genie():
             else:
                 st.caption("Save any Genie answer to see it here.")
 
+        # Frequently asked by you
         with st.expander("🔥 Frequently asked by you", expanded=False):
             suggestions = [
                 "forecast cash outflow for the next 7, 14, 30, 60, and 90 days",
                 "show me total spend ytd, monthly trends, and top 5 vendors",
                 "which invoices should we pay early to capture discounts"
             ]
-            st.markdown("Click a chip to fill the input:")
+            st.markdown("**Click a chip to fill the input:**")
+            chip_html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">'
             for chip in suggestions:
-                if st.button(chip, key=f"chip_{chip[:20]}", use_container_width=True):
-                    st.session_state.genie_prefill = chip
-                    st.rerun()
+                chip_html += f'<div class="suggestion-chip" onclick="document.querySelector(\'input[type=text]\').value = \'{chip}\';">{chip}</div>'
+            chip_html += '</div>'
+            st.markdown(chip_html, unsafe_allow_html=True)
+
             faqs = get_frequent_questions_by_user_cached(5)
             if faqs:
                 st.markdown("---")
@@ -1021,15 +1036,26 @@ def render_genie():
                     if st.button(f"{faq['query'][:50]} ({faq['count']})", key=f"faq_user_{faq['query']}", use_container_width=True):
                         st.session_state.genie_prefill = faq["query"]
                         st.rerun()
+            else:
+                st.caption("Your frequent questions will appear here.")
 
+        # Most frequent (all)
         with st.expander("🌍 Most frequent (all)", expanded=False):
             all_faqs = get_frequent_questions_all_cached(5)
             if all_faqs:
                 for faq in all_faqs:
                     st.button(f"{faq['query'][:50]} ({faq['count']})", key=f"faq_all_{faq['query']}", use_container_width=True, disabled=True)
+            else:
+                st.caption("No questions yet.")
 
     with right_col:
-        st.markdown("<div style='text-align: center; margin-bottom: 1rem;'><h3>💬 Start a Conversation</h3><p>Ask a natural language question about your procurement data.</p></div>", unsafe_allow_html=True)
+        # Centered welcome
+        st.markdown('<div class="centered-container">', unsafe_allow_html=True)
+        st.markdown("### 💬 Start a Conversation")
+        st.markdown("Ask questions about your Procurement to Pay data, or select a pre-built analysis from the library.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Chat history area
         st.markdown('<div class="chat-scrollable">', unsafe_allow_html=True)
         for msg in st.session_state.genie_messages:
             if msg["role"] == "user":
@@ -1081,6 +1107,7 @@ def render_genie():
                         st.error(resp.get("message", "Unknown error"))
         st.markdown('</div>', unsafe_allow_html=True)
 
+        # Input form
         with st.form(key="genie_form", clear_on_submit=True):
             col_input, col_btn = st.columns([0.85, 0.15])
             with col_input:
