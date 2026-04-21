@@ -85,7 +85,7 @@ def render_filters():
     return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.selected_vendor
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (larger cards, 4 per row, 2 rows per page)
+# Helper: Needs Attention Section (colored cards, clickable pill)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     # Session state for tabs and pagination
@@ -152,6 +152,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         status_label = "Overdue"
         status_color = "#dc2626"
         status_bg = "#fee2e2"
+        card_bg = "#FFF5F5"  # light red
     elif active_tab == "Disputed":
         attention_sql = f"""
             SELECT
@@ -169,6 +170,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         status_label = "Disputed"
         status_color = "#d97706"
         status_bg = "#fef3c7"
+        card_bg = "#FFFBEB"  # light orange
     else:  # Due soon
         attention_sql = f"""
             SELECT
@@ -188,6 +190,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         status_label = "Due soon"
         status_color = "#2563eb"
         status_bg = "#dbeafe"
+        card_bg = "#EFF6FF"  # light blue
 
     attention_df = run_query(attention_sql)
 
@@ -219,34 +222,34 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     end_idx = min(start_idx + items_per_page, total_items)
     page_df = attention_df.iloc[start_idx:end_idx]
 
-    # CSS for larger cards
-    st.markdown("""
+    # CSS for colored cards and pill button
+    st.markdown(f"""
     <style>
     /* Pill tabs styling */
-    div[data-testid="column"] button {
+    div[data-testid="column"] button {{
         border-radius: 40px !important;
         padding: 0.4rem 0.8rem !important;
         font-weight: 500 !important;
-    }
-    /* Card container – larger size */
-    .attention-card {
-        background-color: #FFFFFF;
+    }}
+    /* Card container – uses dynamic background color */
+    .attention-card {{
+        background-color: {card_bg};
         border-radius: 20px;
         padding: 1.2rem;
         box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        border: 1px solid #e5e7eb;
+        border: 1px solid rgba(0,0,0,0.08);
         transition: transform 0.2s, box-shadow 0.2s;
         height: 100%;
         min-height: 220px;
         display: flex;
         flex-direction: column;
-    }
-    .attention-card:hover {
+    }}
+    .attention-card:hover {{
         transform: translateY(-3px);
         box-shadow: 0 8px 20px rgba(0,0,0,0.1);
-    }
+    }}
     /* Pill button for invoice number */
-    .invoice-pill {
+    .invoice-pill {{
         background-color: #3b82f6;
         color: white;
         border-radius: 9999px;
@@ -259,38 +262,38 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         cursor: pointer;
         border: none;
         width: auto;
-    }
-    .invoice-pill:hover {
+    }}
+    .invoice-pill:hover {{
         background-color: #2563eb;
-    }
+    }}
     /* Status label */
-    .status-label {
+    .status-label {{
         font-size: 0.8rem;
         font-weight: 600;
         padding: 4px 12px;
         border-radius: 20px;
         display: inline-block;
         margin-left: auto;
-    }
+    }}
     /* Amount */
-    .card-amount {
+    .card-amount {{
         font-size: 1.6rem;
         font-weight: 800;
         margin: 0.75rem 0;
         color: #111827;
-    }
+    }}
     /* Vendor name */
-    .vendor-name {
+    .vendor-name {{
         font-size: 1rem;
         font-weight: 500;
         color: #374151;
         margin-bottom: 0.25rem;
-    }
+    }}
     /* Due date */
-    .due-date {
+    .due-date {{
         font-size: 0.85rem;
         color: #6b7280;
-    }
+    }}
     </style>
     """, unsafe_allow_html=True)
 
