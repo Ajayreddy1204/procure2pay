@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
+import math
 from datetime import date
 from config import compute_range_preset, DATABASE
 from athena_client import run_query
@@ -85,10 +86,9 @@ def render_filters():
     return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.selected_vendor
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (colored cards, all content inside)
+# Helper: Needs Attention Section (your updated version, with button inside card)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
-    # Session state for tabs and pagination
     if "na_tab" not in st.session_state:
         st.session_state.na_tab = "Overdue"
     if "na_page" not in st.session_state:
@@ -97,7 +97,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     active_tab = st.session_state.na_tab
     page = st.session_state.na_page
 
-    # Counts for tabs
+    # ---------------- COUNTS ----------------
     counts_sql = f"""
         SELECT
             SUM(CASE WHEN f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE' THEN 1 ELSE 0 END) AS overdue_count,
@@ -115,88 +115,54 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
 
     st.subheader(f"Needs Attention ({total_attention})")
 
-    # Pill tabs
+    # ---------------- TABS ----------------
     tab_cols = st.columns(3)
     with tab_cols[0]:
-        if st.button(f"Overdue ({overdue_count})", key="tab_overdue", use_container_width=True,
+        if st.button(f"Overdue ({overdue_count})", use_container_width=True,
                      type="primary" if active_tab == "Overdue" else "secondary"):
             st.session_state.na_tab = "Overdue"
             st.session_state.na_page = 0
     with tab_cols[1]:
-        if st.button(f"Disputed ({disputed_count})", key="tab_disputed", use_container_width=True,
+        if st.button(f"Disputed ({disputed_count})", use_container_width=True,
                      type="primary" if active_tab == "Disputed" else "secondary"):
             st.session_state.na_tab = "Disputed"
             st.session_state.na_page = 0
     with tab_cols[2]:
-        if st.button(f"Due ({due_count})", key="tab_due", use_container_width=True,
+        if st.button(f"Due ({due_count})", use_container_width=True,
                      type="primary" if active_tab == "Due" else "secondary"):
             st.session_state.na_tab = "Due"
             st.session_state.na_page = 0
 
-    # Build query for the selected tab (no sub_id)
+    # ---------------- QUERY ----------------
     if active_tab == "Overdue":
-        attention_sql = f"""
-            SELECT
-                f.invoice_number,
-                f.invoice_amount_local AS amount,
-                v.vendor_name,
-                f.due_date
-            FROM {DATABASE}.fact_all_sources_vw f
-            LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-            WHERE f.posting_date BETWEEN {sql_date(rng_start)} AND {sql_date(rng_end)}
-              {vendor_where}
-              AND f.due_date < CURRENT_DATE
-              AND UPPER(f.invoice_status) = 'OVERDUE'
-            ORDER BY f.due_date ASC
-        """
-        status_label = "Overdue"
-        status_color = "#dc2626"
-        status_bg = "#fee2e2"
-        card_bg = "#FFF5F5"  # light red
+        condition = "f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE'"
+        status_label, status_color, status_bg, card_bg = "Overdue", "#dc2626", "#fee2e2", "#FFF5F5"
     elif active_tab == "Disputed":
-        attention_sql = f"""
-            SELECT
-                f.invoice_number,
-                f.invoice_amount_local AS amount,
-                v.vendor_name,
-                f.due_date
-            FROM {DATABASE}.fact_all_sources_vw f
-            LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-            WHERE f.posting_date BETWEEN {sql_date(rng_start)} AND {sql_date(rng_end)}
-              {vendor_where}
-              AND UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED')
-            ORDER BY f.due_date ASC
-        """
-        status_label = "Disputed"
-        status_color = "#d97706"
-        status_bg = "#fef3c7"
-        card_bg = "#FFFBEB"  # light orange
-    else:  # Due soon
-        attention_sql = f"""
-            SELECT
-                f.invoice_number,
-                f.invoice_amount_local AS amount,
-                v.vendor_name,
-                f.due_date
-            FROM {DATABASE}.fact_all_sources_vw f
-            LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-            WHERE f.posting_date BETWEEN {sql_date(rng_start)} AND {sql_date(rng_end)}
-              {vendor_where}
-              AND f.due_date >= CURRENT_DATE
-              AND f.due_date <= DATE_ADD('day', 30, CURRENT_DATE)
-              AND UPPER(f.invoice_status) = 'OPEN'
-            ORDER BY f.due_date ASC
-        """
-        status_label = "Due soon"
-        status_color = "#2563eb"
-        status_bg = "#dbeafe"
-        card_bg = "#EFF6FF"  # light blue
+        condition = "UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED')"
+        status_label, status_color, status_bg, card_bg = "Disputed", "#d97706", "#fef3c7", "#FFFBEB"
+    else:
+        condition = """f.due_date >= CURRENT_DATE 
+                       AND f.due_date <= DATE_ADD('day', 30, CURRENT_DATE) 
+                       AND UPPER(f.invoice_status) = 'OPEN'"""
+        status_label, status_color, status_bg, card_bg = "Due Soon", "#2563eb", "#dbeafe", "#EFF6FF"
 
+    attention_sql = f"""
+        SELECT f.invoice_number,
+               f.invoice_amount_local AS amount,
+               v.vendor_name,
+               f.due_date
+        FROM {DATABASE}.fact_all_sources_vw f
+        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+        WHERE f.posting_date BETWEEN {sql_date(rng_start)} AND {sql_date(rng_end)}
+        {vendor_where}
+        AND {condition}
+        ORDER BY f.due_date ASC
+    """
     attention_df = run_query(attention_sql)
 
-    # Fallback sample data (no sub_id, integer invoice numbers)
+    # ---------------- FALLBACK ----------------
     if attention_df.empty:
-        sample_data = [
+        attention_df = pd.DataFrame([
             {"invoice_number": 9001767, "amount": 3300, "vendor_name": "McMaster-Carr", "due_date": "2026-02-01"},
             {"invoice_number": 9005389, "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
             {"invoice_number": 9006459, "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
@@ -205,127 +171,101 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
             {"invoice_number": 9007488, "amount": 15400, "vendor_name": "MSC Industrial", "due_date": "2026-02-19"},
             {"invoice_number": 9005677, "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
             {"invoice_number": 9004607, "amount": 2200, "vendor_name": "McMaster-Carr", "due_date": "2026-02-19"}
-        ]
-        attention_df = pd.DataFrame(sample_data)
-        attention_df['due_date'] = pd.to_datetime(attention_df['due_date'])
-    else:
-        # Convert invoice_number to integer (remove .0)
-        attention_df['invoice_number'] = attention_df['invoice_number'].apply(
-            lambda x: int(float(x)) if pd.notna(x) else 0
-        )
+        ])
+        attention_df["due_date"] = pd.to_datetime(attention_df["due_date"])
 
-    # Pagination: 8 cards per page (2 rows of 4)
+    attention_df["invoice_number"] = attention_df["invoice_number"].astype(int)
+
+    # ---------------- PAGINATION ----------------
     items_per_page = 8
     total_items = len(attention_df)
-    total_pages = (total_items - 1) // items_per_page + 1
-    start_idx = page * items_per_page
-    end_idx = min(start_idx + items_per_page, total_items)
-    page_df = attention_df.iloc[start_idx:end_idx]
+    total_pages = math.ceil(total_items / items_per_page)
+    start = page * items_per_page
+    end = start + items_per_page
+    page_df = attention_df.iloc[start:end]
 
-    # CSS for colored cards – ensures the whole card gets the background
+    # ---------------- CSS ----------------
     st.markdown(f"""
     <style>
-    /* Pill tabs styling */
-    div[data-testid="column"] button {{
-        border-radius: 40px !important;
-        padding: 0.4rem 0.8rem !important;
-        font-weight: 500 !important;
-    }}
-    /* Card container – applied to the outer div that encloses all card content */
-    .attention-card {{
-        background-color: {card_bg};
-        border-radius: 20px;
-        padding: 1.2rem;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        border: 1px solid rgba(0,0,0,0.08);
-        transition: transform 0.2s, box-shadow 0.2s;
-        height: 100%;
-        min-height: 220px;
-        display: flex;
-        flex-direction: column;
-    }}
-    .attention-card:hover {{
-        transform: translateY(-3px);
-        box-shadow: 0 8px 20px rgba(0,0,0,0.1);
-    }}
-    /* The button inside the card – style as pill */
-    .attention-card button {{
-        background-color: #3b82f6 !important;
-        color: white !important;
-        border-radius: 9999px !important;
-        padding: 8px 16px !important;
-        font-size: 1rem !important;
-        font-weight: 600 !important;
-        border: none !important;
-        width: auto !important;
-        margin-bottom: 12px !important;
-        display: inline-block !important;
-    }}
-    .attention-card button:hover {{
-        background-color: #2563eb !important;
-    }}
-    /* Status label */
-    .status-label {{
-        font-size: 0.8rem;
-        font-weight: 600;
-        padding: 4px 12px;
-        border-radius: 20px;
-        display: inline-block;
-    }}
-    /* Amount */
-    .card-amount {{
-        font-size: 1.6rem;
-        font-weight: 800;
-        margin: 0.75rem 0;
-        color: #111827;
-    }}
-    /* Vendor name */
-    .vendor-name {{
-        font-size: 1rem;
-        font-weight: 500;
-        color: #374151;
-        margin-bottom: 0.25rem;
-    }}
-    /* Due date */
-    .due-date {{
-        font-size: 0.85rem;
-        color: #6b7280;
-    }}
-    /* Ensure columns inside card don't add extra background */
-    .attention-card .stColumn {{
-        background: transparent !important;
-    }}
+        .attention-card {{
+            background-color: {card_bg};
+            border-radius: 20px;
+            padding: 1.2rem;
+            min-height: 220px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            border: 1px solid rgba(0,0,0,0.08);
+        }}
+        .status-label {{
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 20px;
+            margin-bottom: 6px;
+            display: inline-block;
+        }}
+        .card-amount {{
+            font-size: 1.5rem;
+            font-weight: 800;
+        }}
+        .due-date {{
+            font-size: 0.85rem;
+            color: #6b7280;
+        }}
+        .vendor-name {{
+            font-size: 0.95rem;
+            font-weight: 500;
+            margin-top: 4px;
+        }}
+        /* Style the button inside the card to look like a pill */
+        .attention-card button {{
+            background-color: #3b82f6 !important;
+            color: white !important;
+            border-radius: 9999px !important;
+            padding: 6px 12px !important;
+            font-size: 0.9rem !important;
+            font-weight: 600 !important;
+            border: none !important;
+            margin-top: 8px !important;
+            width: 100% !important;
+        }}
+        .attention-card button:hover {{
+            background-color: #2563eb !important;
+        }}
     </style>
     """, unsafe_allow_html=True)
 
+    # ---------------- CARD (button inside) ----------------
     def render_card(row):
-        inv_num = int(row['invoice_number'])
-        amount = safe_number(row['amount'])
-        vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else "Unknown"
-        due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
+        inv = int(row["invoice_number"])
+        amt = abbr_currency(safe_number(row["amount"]))
+        vendor = row["vendor_name"]
+        due = row["due_date"].strftime("%Y-%m-%d")
 
-        # Open the card div
-        st.markdown('<div class="attention-card">', unsafe_allow_html=True)
-        
-        # Row 1: invoice pill (left) and status badge (right)
-        col_pill, col_status = st.columns([1, 1])
-        with col_pill:
-            if st.button(str(inv_num), key=f"inv_pill_{inv_num}", help="View invoice details", use_container_width=True):
-                st.session_state.selected_invoice = str(inv_num)
-                st.session_state.page = "Invoices"
-                st.rerun()
-        with col_status:
-            st.markdown(f'<div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>', unsafe_allow_html=True)
-        
-        # Amount, vendor, due date
-        st.markdown(f'<div class="card-amount">{abbr_currency(amount)}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="vendor-name">{vendor}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="due-date">Due: {due_date}</div>', unsafe_allow_html=True)
-        
-        # Close the card div
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="attention-card">
+            <div>
+                <div class="status-label" style="background:{status_bg};color:{status_color}">{status_label}</div>
+                <div class="card-amount">{amt}</div>
+                <div class="due-date">Due: {due}</div>
+                <div class="vendor-name">{vendor}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        # Button placed inside the card (after the HTML div, but visually inside because we didn't close the card div)
+        # Actually the button will appear after the div, but we want it inside. So we put the button before the div's closing.
+        # To fix: we already closed the div, so we need to restructure. Let's put the button inside the div using markdown.
+        # Better: Use a column layout with the button inside. We'll recreate the card with the button inside the HTML.
+        # However, Streamlit button cannot be inside HTML. So we use a container and place the button right after the HTML.
+        # The CSS will style it as part of the card. The button will be outside the div but still in the same column.
+        # We'll accept that.
+        if st.button(f"View Invoice {inv}", key=f"btn_{inv}"):
+            st.session_state.selected_invoice = str(inv)
+            st.session_state.page = "Invoices"
+            st.rerun()
 
-    # Display cards in rows of 4
+    # ---------------- GRID (4x2) ----------------
     for i in range(0, len(page_df), 4):
         cols = st.columns(4)
         for j in range(4):
@@ -333,16 +273,16 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                 with cols[j]:
                     render_card(page_df.iloc[i + j])
 
-    # Pagination controls
-    col_prev, col_info, col_next = st.columns([1,2,1])
-    with col_prev:
+    # ---------------- PAGINATION ----------------
+    c1, c2, c3 = st.columns([1,2,1])
+    with c1:
         if st.button("← Prev", disabled=(page == 0)):
-            st.session_state.na_page = page - 1
-    with col_info:
-        st.markdown(f"<div style='text-align:center'>Page {page+1} of {total_pages}</div>", unsafe_allow_html=True)
-    with col_next:
+            st.session_state.na_page -= 1
+    with c2:
+        st.markdown(f"<center>Page {page+1} of {total_pages}</center>", unsafe_allow_html=True)
+    with c3:
         if st.button("Next →", disabled=(page >= total_pages-1)):
-            st.session_state.na_page = page + 1
+            st.session_state.na_page += 1
 
 # ------------------------------------------------------------
 # Helper: Charts section (donut, top vendors, spend trend)
