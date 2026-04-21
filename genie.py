@@ -14,12 +14,13 @@ from quick_analysis import run_quick_analysis
 from config import DATABASE
 
 # ------------------------------------------------------------
-# SQL generation – template‑based, no LLM risk
+# SQL generation – template‑based with fallback to LLM
 # ------------------------------------------------------------
 def get_sql_for_question(question: str) -> str:
     q = question.lower()
-    # 1. Total spend YTD
-    if any(kw in q for kw in ["total spend", "spend ytd", "year-to-date spend"]):
+    
+    # 1. Total spend YTD (exact phrases)
+    if ("total spend" in q or "spend ytd" in q or "year-to-date spend" in q) and ("ytd" in q or "year to date" in q):
         return f"""
             SELECT
                 SUM(COALESCE(f.invoice_amount_local, 0)) AS total_spend_ytd,
@@ -30,8 +31,9 @@ def get_sql_for_question(question: str) -> str:
             WHERE f.invoice_status NOT IN ('Cancelled', 'Rejected')
               AND f.posting_date >= DATE_TRUNC('YEAR', CURRENT_DATE)
         """
+    
     # 2. Top vendors by spend
-    if "top" in q and "vendor" in q and ("spend" in q or "spending" in q):
+    if ("top" in q and "vendor" in q and ("spend" in q or "spending" in q)) or ("vendor analysis" in q):
         return f"""
             SELECT
                 COALESCE(v.vendor_name, 'Unknown') AS vendor_name,
@@ -43,8 +45,9 @@ def get_sql_for_question(question: str) -> str:
             ORDER BY total_spend DESC
             LIMIT 10
         """
+    
     # 3. Monthly spend trend
-    if "monthly" in q and ("spend" in q or "trend" in q):
+    if ("monthly" in q and ("spend" in q or "trend" in q)) or ("spending trend" in q):
         return f"""
             SELECT
                 DATE_TRUNC('month', f.posting_date) AS month,
@@ -56,8 +59,9 @@ def get_sql_for_question(question: str) -> str:
             GROUP BY 1
             ORDER BY month DESC
         """
+    
     # 4. Payment performance / late payments
-    if "payment" in q and ("performance" in q or "late" in q or "cycle" in q):
+    if ("payment performance" in q) or ("late payment" in q) or ("cycle time" in q):
         return f"""
             SELECT
                 DATE_TRUNC('month', f.payment_date) AS month,
@@ -71,8 +75,9 @@ def get_sql_for_question(question: str) -> str:
             GROUP BY 1
             ORDER BY month DESC
         """
+    
     # 5. Invoice aging / overdue
-    if "aging" in q or "overdue" in q or "open invoice" in q:
+    if ("invoice aging" in q) or ("overdue" in q) or ("open invoices" in q):
         return f"""
             SELECT
                 CASE
@@ -96,8 +101,9 @@ def get_sql_for_question(question: str) -> str:
                     ELSE 5
                 END
         """
+    
     # 6. Early payment candidates
-    if "early payment" in q or "capture discount" in q:
+    if ("early payment" in q) or ("capture discount" in q):
         return f"""
             SELECT
                 document_number,
@@ -111,8 +117,9 @@ def get_sql_for_question(question: str) -> str:
             ORDER BY early_pay_priority ASC, savings_if_2pct_discount DESC
             LIMIT 10
         """
+    
     # 7. Cash flow forecast
-    if "cash flow" in q or "forecast outflow" in q:
+    if ("cash flow" in q) or ("forecast outflow" in q):
         return f"""
             SELECT
                 forecast_bucket,
@@ -131,8 +138,9 @@ def get_sql_for_question(question: str) -> str:
                 WHEN 'DUE_90_DAYS' THEN 6
                 ELSE 7 END
         """
+    
     # 8. GR/IR hotspots
-    if "gr/ir" in q and ("balance" in q or "hotspot" in q):
+    if ("gr/ir" in q and "hotspots" in q) or ("gr/ir outstanding" in q):
         return f"""
             SELECT
                 year,
@@ -143,8 +151,9 @@ def get_sql_for_question(question: str) -> str:
             ORDER BY year DESC, month DESC
             LIMIT 12
         """
+    
     # 9. GR/IR root causes
-    if "gr/ir" in q and ("root cause" in q or "aging" in q):
+    if ("gr/ir" in q and "root cause" in q) or ("gr/ir aging" in q):
         return f"""
             SELECT
                 year,
@@ -155,8 +164,9 @@ def get_sql_for_question(question: str) -> str:
             ORDER BY year DESC, month DESC
             LIMIT 6
         """
+    
     # 10. GR/IR working capital
-    if "gr/ir" in q and ("working capital" in q or "release" in q):
+    if ("gr/ir" in q and "working capital" in q) or ("release working capital" in q):
         return f"""
             SELECT
                 year,
@@ -169,8 +179,9 @@ def get_sql_for_question(question: str) -> str:
             FROM {DATABASE}.gr_ir_outstanding_balance_vw
             ORDER BY year DESC, month DESC
         """
+    
     # 11. GR/IR vendor follow‑up
-    if "gr/ir" in q and ("vendor" in q or "follow up" in q):
+    if ("gr/ir" in q and "vendor" in q) or ("follow up" in q and "gr/ir" in q):
         return f"""
             SELECT
                 v.vendor_name,
@@ -184,41 +195,50 @@ def get_sql_for_question(question: str) -> str:
             ORDER BY total_amount DESC
             LIMIT 10
         """
-    # 12. Fallback – safe summary query (always returns data)
-    return f"""
-        SELECT
-            SUM(COALESCE(f.invoice_amount_local, 0)) AS total_spend,
-            COUNT(DISTINCT f.invoice_number) AS total_invoices,
-            COUNT(DISTINCT f.vendor_id) AS active_vendors,
-            MIN(f.posting_date) AS earliest_invoice,
-            MAX(f.posting_date) AS latest_invoice
-        FROM {DATABASE}.fact_all_sources_vw f
-        WHERE f.invoice_status NOT IN ('Cancelled', 'Rejected')
-    """
+    
+    # 12. If no template matches, use LLM to generate SQL (safe fallback)
+    schema_prompt = f"""
+You are an Athena SQL expert. Generate ONLY a valid SELECT statement for the user's question.
+Schema:
+- Table {DATABASE}.fact_all_sources_vw: columns invoice_amount_local, posting_date, invoice_status, due_date, payment_date, vendor_id, invoice_number
+- Table {DATABASE}.dim_vendor_vw: columns vendor_id, vendor_name
+For vendor name, join: LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+Do NOT use JSON functions.
+Always include LIMIT 1000.
+Question: {question}
+SQL:
+"""
+    sql = ask_bedrock(schema_prompt, system_prompt="You are an Athena SQL expert.")
+    if sql:
+        sql = re.sub(r"```sql\s*", "", sql)
+        sql = re.sub(r"```\s*", "", sql).strip()
+        if not sql.lower().startswith("select"):
+            sql = ""
+    if not sql:
+        # Ultimate fallback: return a summary of all data
+        sql = f"""
+            SELECT
+                SUM(COALESCE(f.invoice_amount_local, 0)) AS total_spend,
+                COUNT(DISTINCT f.invoice_number) AS total_invoices,
+                COUNT(DISTINCT f.vendor_id) AS active_vendors
+            FROM {DATABASE}.fact_all_sources_vw f
+            WHERE f.invoice_status NOT IN ('Cancelled', 'Rejected')
+        """
+    return sql
 
 def process_custom_query(query: str) -> dict:
     sql = get_sql_for_question(query)
     if not sql or not is_safe_sql(sql):
-        sql = "SELECT 'No data available' AS message LIMIT 1"
+        return {"layout": "error", "message": "Could not generate safe SQL for this question."}
     sql = ensure_limit(sql)
     try:
         df = run_query(sql)
     except Exception as e:
-        return {
-            "layout": "analyst",
-            "sql": sql,
-            "df": [],
-            "question": query,
-            "analyst_response": f"**Error executing query:** {str(e)}\n\nPlease try a different question."
-        }
+        return {"layout": "error", "message": f"Athena query failed: {e}"}
+    
     if df.empty:
-        return {
-            "layout": "analyst",
-            "sql": sql,
-            "df": [],
-            "question": query,
-            "analyst_response": "**No data found** for your question. Try a different question or check your data."
-        }
+        return {"layout": "error", "message": "Query returned no data. Try rephrasing your question."}
+    
     # Generate insights using Bedrock Nova
     data_preview = df.head(10).to_string(index=False, max_colwidth=40)
     prompt = f"""
@@ -243,6 +263,7 @@ Respond in plain text using markdown for headings and bullet points. Do not incl
     analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst.")
     if not analyst_text:
         analyst_text = f"**Analysis complete.**\n\nHere are the results:\n\n{data_preview}"
+    
     return {
         "layout": "analyst",
         "sql": sql,
@@ -252,7 +273,7 @@ Respond in plain text using markdown for headings and bullet points. Do not incl
     }
 
 # ------------------------------------------------------------
-# Specialised handlers (full implementations)
+# Specialised handlers (full implementations – same as before)
 # ------------------------------------------------------------
 def process_cash_flow_forecast(question: str) -> dict:
     cf_sql = f"""
@@ -702,7 +723,7 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     }
 
 # ------------------------------------------------------------
-# Rendering functions
+# Rendering functions (same as before)
 # ------------------------------------------------------------
 def render_cash_flow_response(result: dict):
     df = pd.DataFrame(result["df"])
