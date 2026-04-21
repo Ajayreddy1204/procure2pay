@@ -14,128 +14,213 @@ from quick_analysis import run_quick_analysis
 from config import DATABASE
 
 # ------------------------------------------------------------
-# Helper: safe SQL generation using templates + LLM as fallback
+# SQL generation – template‑based, no LLM risk
 # ------------------------------------------------------------
 def get_sql_for_question(question: str) -> str:
-    """Return a valid Athena SQL query based on keywords. If no template matches,
-    ask Bedrock Nova with a very strict prompt that forbids JSON functions."""
-    q_lower = question.lower()
-
+    q = question.lower()
     # 1. Total spend YTD
-    if "total spend" in q_lower and ("ytd" in q_lower or "year to date" in q_lower):
+    if any(kw in q for kw in ["total spend", "spend ytd", "year-to-date spend"]):
         return f"""
             SELECT
-                SUM(COALESCE(invoice_amount_local, 0)) AS total_spend_ytd,
-                MIN(posting_date) AS earliest_invoice,
-                MAX(posting_date) AS latest_invoice
-            FROM {DATABASE}.fact_all_sources_vw
-            WHERE invoice_status NOT IN ('Cancelled', 'Rejected')
-              AND posting_date >= DATE_TRUNC('YEAR', CURRENT_DATE)
+                SUM(COALESCE(f.invoice_amount_local, 0)) AS total_spend_ytd,
+                MIN(f.posting_date) AS earliest_invoice,
+                MAX(f.posting_date) AS latest_invoice,
+                COUNT(DISTINCT f.invoice_number) AS invoice_count
+            FROM {DATABASE}.fact_all_sources_vw f
+            WHERE f.invoice_status NOT IN ('Cancelled', 'Rejected')
+              AND f.posting_date >= DATE_TRUNC('YEAR', CURRENT_DATE)
         """
-
     # 2. Top vendors by spend
-    if "top" in q_lower and "vendor" in q_lower and "spend" in q_lower:
+    if "top" in q and "vendor" in q and ("spend" in q or "spending" in q):
         return f"""
             SELECT
-                vendor_name,
-                SUM(COALESCE(invoice_amount_local, 0)) AS total_spend
-            FROM {DATABASE}.fact_all_sources_vw
-            WHERE invoice_status NOT IN ('Cancelled', 'Rejected')
-            GROUP BY vendor_name
+                COALESCE(v.vendor_name, 'Unknown') AS vendor_name,
+                SUM(COALESCE(f.invoice_amount_local, 0)) AS total_spend
+            FROM {DATABASE}.fact_all_sources_vw f
+            LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+            WHERE f.invoice_status NOT IN ('Cancelled', 'Rejected')
+            GROUP BY v.vendor_name
             ORDER BY total_spend DESC
             LIMIT 10
         """
-
     # 3. Monthly spend trend
-    if "monthly" in q_lower and ("spend" in q_lower or "trend" in q_lower):
+    if "monthly" in q and ("spend" in q or "trend" in q):
         return f"""
             SELECT
-                DATE_TRUNC('month', posting_date) AS month,
-                SUM(COALESCE(invoice_amount_local, 0)) AS monthly_spend,
+                DATE_TRUNC('month', f.posting_date) AS month,
+                SUM(COALESCE(f.invoice_amount_local, 0)) AS monthly_spend,
                 COUNT(*) AS invoice_count
-            FROM {DATABASE}.fact_all_sources_vw
-            WHERE invoice_status NOT IN ('Cancelled', 'Rejected')
-              AND posting_date >= DATE_ADD('month', -12, CURRENT_DATE)
+            FROM {DATABASE}.fact_all_sources_vw f
+            WHERE f.invoice_status NOT IN ('Cancelled', 'Rejected')
+              AND f.posting_date >= DATE_ADD('month', -12, CURRENT_DATE)
             GROUP BY 1
             ORDER BY month DESC
         """
-
-    # 4. Payment performance
-    if "payment" in q_lower and ("performance" in q_lower or "late" in q_lower):
+    # 4. Payment performance / late payments
+    if "payment" in q and ("performance" in q or "late" in q or "cycle" in q):
         return f"""
             SELECT
-                DATE_TRUNC('month', payment_date) AS month,
+                DATE_TRUNC('month', f.payment_date) AS month,
                 COUNT(*) AS total_payments,
-                SUM(CASE WHEN payment_date > due_date THEN 1 ELSE 0 END) AS late_payments,
-                AVG(CASE WHEN payment_date > due_date THEN DATE_DIFF('day', due_date, payment_date) END) AS avg_late_days
-            FROM {DATABASE}.fact_all_sources_vw
-            WHERE payment_date IS NOT NULL
-              AND payment_date >= DATE_ADD('month', -12, CURRENT_DATE)
+                SUM(CASE WHEN f.payment_date > f.due_date THEN 1 ELSE 0 END) AS late_payments,
+                AVG(CASE WHEN f.payment_date > f.due_date THEN DATE_DIFF('day', f.due_date, f.payment_date) ELSE 0 END) AS avg_late_days,
+                AVG(DATE_DIFF('day', f.posting_date, f.payment_date)) AS avg_cycle_days
+            FROM {DATABASE}.fact_all_sources_vw f
+            WHERE f.payment_date IS NOT NULL
+              AND f.payment_date >= DATE_ADD('month', -12, CURRENT_DATE)
             GROUP BY 1
             ORDER BY month DESC
         """
-
-    # 5. Invoice aging buckets
-    if "aging" in q_lower or "overdue" in q_lower:
+    # 5. Invoice aging / overdue
+    if "aging" in q or "overdue" in q or "open invoice" in q:
         return f"""
             SELECT
                 CASE
-                    WHEN due_date < CURRENT_DATE THEN 'Overdue'
-                    WHEN due_date <= CURRENT_DATE + INTERVAL '7' DAY THEN 'Due 0-7 days'
-                    WHEN due_date <= CURRENT_DATE + INTERVAL '30' DAY THEN 'Due 8-30 days'
-                    WHEN due_date <= CURRENT_DATE + INTERVAL '90' DAY THEN 'Due 31-90 days'
-                    ELSE 'Due >90 days'
+                    WHEN f.due_date < CURRENT_DATE THEN 'Overdue'
+                    WHEN f.due_date <= CURRENT_DATE + INTERVAL '7' DAY THEN 'Due in 0-7 days'
+                    WHEN f.due_date <= CURRENT_DATE + INTERVAL '30' DAY THEN 'Due in 8-30 days'
+                    WHEN f.due_date <= CURRENT_DATE + INTERVAL '90' DAY THEN 'Due in 31-90 days'
+                    ELSE 'Due in >90 days'
                 END AS aging_bucket,
                 COUNT(*) AS invoice_count,
-                SUM(COALESCE(invoice_amount_local, 0)) AS total_amount
-            FROM {DATABASE}.fact_all_sources_vw
-            WHERE invoice_status IN ('OPEN', 'DUE', 'OVERDUE')
+                SUM(COALESCE(f.invoice_amount_local, 0)) AS total_amount
+            FROM {DATABASE}.fact_all_sources_vw f
+            WHERE f.invoice_status IN ('OPEN', 'DUE', 'OVERDUE')
             GROUP BY 1
-            ORDER BY 1
+            ORDER BY 
+                CASE aging_bucket
+                    WHEN 'Overdue' THEN 1
+                    WHEN 'Due in 0-7 days' THEN 2
+                    WHEN 'Due in 8-30 days' THEN 3
+                    WHEN 'Due in 31-90 days' THEN 4
+                    ELSE 5
+                END
         """
-
-    # 6. Fallback: use LLM but with a very strict prompt
-    strict_prompt = f"""
-You are an Athena SQL expert. Generate ONLY a valid SELECT statement for the user's question.
-Rules:
-- Table: {DATABASE}.fact_all_sources_vw
-- Columns: invoice_amount_local (numeric), posting_date (date), invoice_status (string), vendor_name (string), due_date (date), payment_date (date)
-- Do NOT use JSON_OBJECT, JSON_ARRAY or any JSON functions.
-- Use SUM(COALESCE(column, 0)) for totals.
-- Always include a LIMIT clause (max 1000).
-- Output ONLY the SQL, no extra words.
-
-Question: {question}
-SQL:
-"""
-    sql = ask_bedrock(strict_prompt, system_prompt="You are an Athena SQL expert.")
-    if sql:
-        # Remove markdown code fences
-        sql = re.sub(r"```sql\s*", "", sql)
-        sql = re.sub(r"```\s*", "", sql).strip()
-    return sql
+    # 6. Early payment candidates
+    if "early payment" in q or "capture discount" in q:
+        return f"""
+            SELECT
+                document_number,
+                vendor_name,
+                invoice_amount,
+                due_date,
+                days_until_due,
+                savings_if_2pct_discount,
+                early_pay_priority
+            FROM {DATABASE}.early_payment_candidates_vw
+            ORDER BY early_pay_priority ASC, savings_if_2pct_discount DESC
+            LIMIT 10
+        """
+    # 7. Cash flow forecast
+    if "cash flow" in q or "forecast outflow" in q:
+        return f"""
+            SELECT
+                forecast_bucket,
+                invoice_count,
+                total_amount,
+                earliest_due,
+                latest_due
+            FROM {DATABASE}.cash_flow_forecast_vw
+            ORDER BY CASE forecast_bucket
+                WHEN 'TOTAL_UNPAID' THEN 0
+                WHEN 'OVERDUE_NOW' THEN 1
+                WHEN 'DUE_7_DAYS' THEN 2
+                WHEN 'DUE_14_DAYS' THEN 3
+                WHEN 'DUE_30_DAYS' THEN 4
+                WHEN 'DUE_60_DAYS' THEN 5
+                WHEN 'DUE_90_DAYS' THEN 6
+                ELSE 7 END
+        """
+    # 8. GR/IR hotspots
+    if "gr/ir" in q and ("balance" in q or "hotspot" in q):
+        return f"""
+            SELECT
+                year,
+                month,
+                invoice_count,
+                total_grir_blnc AS total_grir_balance
+            FROM {DATABASE}.gr_ir_outstanding_balance_vw
+            ORDER BY year DESC, month DESC
+            LIMIT 12
+        """
+    # 9. GR/IR root causes
+    if "gr/ir" in q and ("root cause" in q or "aging" in q):
+        return f"""
+            SELECT
+                year,
+                month,
+                pct_grir_over_60,
+                cnt_grir_over_60
+            FROM {DATABASE}.gr_ir_aging_vw
+            ORDER BY year DESC, month DESC
+            LIMIT 6
+        """
+    # 10. GR/IR working capital
+    if "gr/ir" in q and ("working capital" in q or "release" in q):
+        return f"""
+            SELECT
+                year,
+                month,
+                total_grir_blnc,
+                CASE WHEN (year * 100 + month) <= (EXTRACT(YEAR FROM CURRENT_DATE) * 100 + EXTRACT(MONTH FROM CURRENT_DATE) - 60)
+                     THEN total_grir_blnc ELSE 0 END AS older_than_60_days,
+                CASE WHEN (year * 100 + month) <= (EXTRACT(YEAR FROM CURRENT_DATE) * 100 + EXTRACT(MONTH FROM CURRENT_DATE) - 90)
+                     THEN total_grir_blnc ELSE 0 END AS older_than_90_days
+            FROM {DATABASE}.gr_ir_outstanding_balance_vw
+            ORDER BY year DESC, month DESC
+        """
+    # 11. GR/IR vendor follow‑up
+    if "gr/ir" in q and ("vendor" in q or "follow up" in q):
+        return f"""
+            SELECT
+                v.vendor_name,
+                COUNT(*) AS grir_count,
+                SUM(f.invoice_amount_local) AS total_amount,
+                AVG(DATE_DIFF('day', f.posting_date, CURRENT_DATE)) AS avg_age_days
+            FROM {DATABASE}.fact_all_sources_vw f
+            LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+            WHERE f.invoice_status = 'OPEN' AND f.purchase_order_reference IS NOT NULL
+            GROUP BY v.vendor_name
+            ORDER BY total_amount DESC
+            LIMIT 10
+        """
+    # 12. Fallback – safe summary query (always returns data)
+    return f"""
+        SELECT
+            SUM(COALESCE(f.invoice_amount_local, 0)) AS total_spend,
+            COUNT(DISTINCT f.invoice_number) AS total_invoices,
+            COUNT(DISTINCT f.vendor_id) AS active_vendors,
+            MIN(f.posting_date) AS earliest_invoice,
+            MAX(f.posting_date) AS latest_invoice
+        FROM {DATABASE}.fact_all_sources_vw f
+        WHERE f.invoice_status NOT IN ('Cancelled', 'Rejected')
+    """
 
 def process_custom_query(query: str) -> dict:
     sql = get_sql_for_question(query)
-    if not sql:
-        return {"layout": "error", "message": "Could not generate SQL for this question."}
-
-    # Ensure safe and limit
-    if not is_safe_sql(sql):
-        return {"layout": "error", "message": "Generated SQL is not safe to execute."}
+    if not sql or not is_safe_sql(sql):
+        sql = "SELECT 'No data available' AS message LIMIT 1"
     sql = ensure_limit(sql)
-
     try:
         df = run_query(sql)
     except Exception as e:
-        return {"layout": "error", "message": f"Athena query failed: {e}"}
-
+        return {
+            "layout": "analyst",
+            "sql": sql,
+            "df": [],
+            "question": query,
+            "analyst_response": f"**Error executing query:** {str(e)}\n\nPlease try a different question."
+        }
     if df.empty:
-        return {"layout": "error", "message": "Query returned no data."}
-
-    # Prepare data preview for LLM to generate the descriptive/prescriptive response
+        return {
+            "layout": "analyst",
+            "sql": sql,
+            "df": [],
+            "question": query,
+            "analyst_response": "**No data found** for your question. Try a different question or check your data."
+        }
+    # Generate insights using Bedrock Nova
     data_preview = df.head(10).to_string(index=False, max_colwidth=40)
-
     prompt = f"""
 You are a senior procurement analyst. The user asked: "{query}".
 
@@ -145,7 +230,7 @@ Based on the data from the SQL below, write a response in exactly this structure
 First write "This is our interpretation of your question:" followed by a clear restatement of the user's question. Then describe the key findings using exact numbers from the data.
 
 **Prescriptive — Recommendations & next steps**
-Write "Based on the provided data, here are the prescriptive insights, specific recommended actions, and risks:" then provide bullet points under subheadings like "Total Spend YTD Insights:", "Recommended Actions:", "Risks:". Each bullet must include specific findings, actions, and where relevant potential losses/savings. End with a concluding sentence.
+Write "Based on the provided data, here are the prescriptive insights, specific recommended actions, and risks:" then provide bullet points under subheadings like "Key Insights:", "Recommended Actions:", "Risks:". Each bullet must include specific findings, actions, and where relevant potential losses/savings. End with a concluding sentence.
 
 Data preview:
 {data_preview}
@@ -157,8 +242,7 @@ Respond in plain text using markdown for headings and bullet points. Do not incl
 """
     analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst.")
     if not analyst_text:
-        analyst_text = "Unable to generate insights at this time."
-
+        analyst_text = f"**Analysis complete.**\n\nHere are the results:\n\n{data_preview}"
     return {
         "layout": "analyst",
         "sql": sql,
@@ -168,7 +252,7 @@ Respond in plain text using markdown for headings and bullet points. Do not incl
     }
 
 # ------------------------------------------------------------
-# All specialised handlers (cash flow, early payment, etc.) are unchanged
+# Specialised handlers (full implementations)
 # ------------------------------------------------------------
 def process_cash_flow_forecast(question: str) -> dict:
     cf_sql = f"""
@@ -246,10 +330,8 @@ def process_cash_flow_forecast(question: str) -> dict:
         used_sql = cf_sql_fallback
     else:
         used_sql = cf_sql
-
     if cf_df.empty:
         return {"layout": "error", "message": "No cash flow forecast data available."}
-
     cf_df.columns = [c.lower() for c in cf_df.columns]
     data_preview = cf_df.to_string(index=False)
     prompt = f"""
@@ -266,7 +348,6 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst focusing on cash flow management.")
     if not analyst_text:
         analyst_text = "Unable to generate insights at this time."
-
     return {
         "layout": "cash_flow",
         "df": cf_df.to_dict(orient="records"),
@@ -314,12 +395,10 @@ def process_early_payment(question: str) -> dict:
         """
         ep_df = run_query(ep_sql_fallback)
         used_sql = ep_sql_fallback
-
     if not ep_df.empty:
         ep_df.columns = [c.lower() for c in ep_df.columns]
     else:
         ep_df = pd.DataFrame()
-
     if ep_df.empty:
         prompt = f"""
 You are a senior procurement analyst. The user asked: "{question}".
@@ -350,7 +429,6 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
         analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst specializing in working capital optimization.")
         if not analyst_text:
             analyst_text = "Unable to generate insights at this time."
-
     return {
         "layout": "early_payment",
         "df": ep_df.to_dict(orient="records") if not ep_df.empty else [],
@@ -389,7 +467,6 @@ def process_payment_timing(question: str) -> dict:
     timing_df = run_query(timing_sql)
     if timing_df.empty:
         return {"layout": "error", "message": "No payment timing data available."}
-
     timing_df.columns = [c.lower() for c in timing_df.columns]
     data_preview = timing_df.to_string(index=False)
     prompt = f"""
@@ -406,7 +483,6 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst focusing on cash flow timing.")
     if not analyst_text:
         analyst_text = "Unable to generate insights at this time."
-
     return {
         "layout": "payment_timing",
         "df": timing_df.to_dict(orient="records"),
@@ -431,7 +507,6 @@ def process_late_payment_trend(question: str) -> dict:
     trend_df = run_query(trend_sql)
     if trend_df.empty:
         return {"layout": "error", "message": "No payment trend data available."}
-
     trend_df.columns = [c.lower() for c in trend_df.columns]
     trend_df["late_pct"] = (trend_df["late_payments"] / trend_df["total_payments"]) * 100
     data_preview = trend_df.tail(6).to_string(index=False)
@@ -449,7 +524,6 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst focusing on payment performance.")
     if not analyst_text:
         analyst_text = "Unable to generate insights at this time."
-
     return {
         "layout": "late_payment_trend",
         "df": trend_df.to_dict(orient="records"),
@@ -628,7 +702,7 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     }
 
 # ------------------------------------------------------------
-# Rendering functions (simplified for clarity)
+# Rendering functions
 # ------------------------------------------------------------
 def render_cash_flow_response(result: dict):
     df = pd.DataFrame(result["df"])
@@ -774,13 +848,49 @@ def render_grir_vendor_followup(result: dict):
         st.code(result["sql"], language="sql")
 
 def render_quick_analysis_response(result: dict):
-    # Simplified version – shows metrics and charts
-    analysis_type = result.get("type", "spending_overview")
-    metrics = result.get("metrics", {})
-    anomaly = result.get("anomaly")
-    monthly_df = result.get("monthly_df")
-    vendors_df = result.get("vendors_df")
+    # Generate AI response if missing
+    if "analyst_response" not in result or not result["analyst_response"]:
+        analysis_type = result.get("type", "spending_overview")
+        metrics = result.get("metrics", {})
+        monthly_df = result.get("monthly_df")
+        vendors_df = result.get("vendors_df")
+        monthly_preview = ""
+        if monthly_df is not None:
+            monthly_preview = monthly_df.head(6).to_string(index=False)
+        vendors_preview = ""
+        if vendors_df is not None:
+            vendors_preview = vendors_df.head(10).to_string(index=False)
+        metrics_str = json.dumps({k: (float(v) if isinstance(v, (int, float)) else str(v)) for k, v in metrics.items()}, indent=2)
+        analysis_prompts = {
+            "spending_overview": "Focus on total spend, month‑over‑month changes, vendor concentration, and any anomalies. Provide actions to optimise spend.",
+            "vendor_analysis": "Focus on vendor concentration (top vendors' share), over‑reliance risks, invoice frequency, and vendor performance. Suggest diversification and contingency plans.",
+            "payment_performance": "Focus on average days to pay, late payment trends, and their impact on supplier relationships and cash flow. Suggest process improvements.",
+            "invoice_aging": "Focus on overdue amounts, aging buckets, and potential cash flow risks. Suggest collection strategies and early payment discounts."
+        }
+        prompt = f"""
+You are a senior procurement analyst. Based on the following data from a {analysis_type.replace('_', ' ')} analysis, write a response with two sections:
 
+1. **Descriptive** – What the data shows. Cite exact numbers, identify trends, and highlight anomalies. Keep it concise (3‑5 sentences).
+2. **Prescriptive** – Specific recommended actions and risks based on the data. List 3‑5 bullet points. Each bullet must include a specific finding, a concrete action, and a brief 'Why it matters'.
+
+Data metrics:
+{metrics_str}
+
+Monthly trend (first 6 rows):
+{monthly_preview}
+
+Top vendors / aging data (first 10 rows):
+{vendors_preview}
+
+Analysis focus: {analysis_prompts.get(analysis_type, "Provide actionable procurement insights.")}
+
+Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
+"""
+        analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst.")
+        result["analyst_response"] = analyst_text
+        set_cache(result.get("question", analysis_type), result)
+    # Display metrics and charts
+    metrics = result.get("metrics", {})
     if metrics:
         st.markdown("### 📊 Key Metrics")
         cols = st.columns(len(metrics))
@@ -803,11 +913,14 @@ def render_quick_analysis_response(result: dict):
                     <div style="font-size: 1.5rem; font-weight: 700; color: #1f2937;">{display}</div>
                 </div>
                 """, unsafe_allow_html=True)
+    anomaly = result.get("anomaly")
     if anomaly:
         st.warning(f"⚠️ **Anomaly Detected**\n\n{anomaly}")
+    monthly_df = result.get("monthly_df")
     if monthly_df is not None and not monthly_df.empty:
         st.subheader("Monthly Trend")
         st.dataframe(monthly_df, use_container_width=True)
+    vendors_df = result.get("vendors_df")
     if vendors_df is not None and not vendors_df.empty:
         st.subheader("Top Vendors")
         st.dataframe(vendors_df.head(10), use_container_width=True)
@@ -816,10 +929,9 @@ def render_quick_analysis_response(result: dict):
         st.markdown(result["analyst_response"])
 
 # ------------------------------------------------------------
-# Main Genie render function – fully working chat box
+# Main Genie render function – chat shows only latest Q&A
 # ------------------------------------------------------------
 def render_genie():
-    # CSS for cards and chat
     st.markdown("""
     <style>
     .genie-card {
@@ -899,11 +1011,11 @@ def render_genie():
     </style>
     """, unsafe_allow_html=True)
 
-    # Session state
+    # Session state – only store the current Q&A
     if "genie_session_id" not in st.session_state:
         st.session_state.genie_session_id = str(uuid.uuid4())
-        st.session_state.genie_messages = []
-        st.session_state.genie_turn_index = 0
+    if "current_messages" not in st.session_state:
+        st.session_state.current_messages = []
     if "genie_prefill" not in st.session_state:
         st.session_state.genie_prefill = ""
 
@@ -914,11 +1026,9 @@ def render_genie():
         "Invoice Aging": "invoice_aging"
     }
 
-    # Auto-run from card buttons
+    # Process auto-run from card buttons
     auto_query = st.session_state.pop("auto_run_query", None)
     if auto_query:
-        st.session_state.genie_messages = []
-        st.session_state.genie_turn_index = 0
         with st.spinner("Running analysis..."):
             lower_q = auto_query.lower()
             if any(kw in lower_q for kw in ["forecast cash outflow", "cash flow forecast"]):
@@ -942,25 +1052,23 @@ def render_genie():
             else:
                 result = process_custom_query(auto_query)
 
-            st.session_state.genie_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
+            st.session_state.current_messages = []
+            st.session_state.current_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
             if result.get("layout") != "error":
                 assistant_content = f"AI Assistant\n\nYour question: {auto_query}\n\n{result.get('analyst_response', 'No analysis available.')}"
-                st.session_state.genie_messages.append({"role": "assistant", "content": assistant_content, "response": result, "timestamp": datetime.now()})
-                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", auto_query)
-                st.session_state.genie_turn_index += 1
-                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", assistant_content, sql_used=result.get("sql", ""))
-                st.session_state.genie_turn_index += 1
+                st.session_state.current_messages.append({"role": "assistant", "content": assistant_content, "response": result, "timestamp": datetime.now()})
+                save_chat_message(st.session_state.genie_session_id, 0, "user", auto_query)
+                save_chat_message(st.session_state.genie_session_id, 1, "assistant", assistant_content, sql_used=result.get("sql", ""))
                 save_question(auto_query, "forecast")
                 set_cache(auto_query, result)
             else:
-                st.session_state.genie_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
+                st.session_state.current_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
         st.rerun()
 
-    # Header
+    # Header and cards
     st.markdown("## 🧞 Welcome to ProcureIQ Genie")
     st.markdown("Let Genie run one of these quick analyses for you")
 
-    # Quick cards
     col1, col2, col3, col4 = st.columns(4)
     cards = [
         ("💰", "Spending Overview", "Track total spend, monthly trends and major changes"),
@@ -1029,9 +1137,9 @@ def render_genie():
         st.markdown("Ask questions about your Procurement to Pay data, or select a pre-built analysis from the library.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Chat history
+        # Chat history – only current messages
         st.markdown('<div class="chat-scrollable">', unsafe_allow_html=True)
-        for msg in st.session_state.genie_messages:
+        for msg in st.session_state.current_messages:
             if msg["role"] == "user":
                 st.markdown(f'<div class="chat-message-user"><strong>You</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
             else:
@@ -1071,7 +1179,7 @@ def render_genie():
                         st.error(resp.get("message", "Unknown error"))
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Input form – placed at the bottom of the right column
+        # Input form
         with st.form(key="genie_form", clear_on_submit=True):
             col_input, col_btn = st.columns([0.85, 0.15])
             with col_input:
@@ -1089,13 +1197,12 @@ def render_genie():
                 with st.spinner("Generating SQL and insights..."):
                     cached = get_cache(user_question)
                     if cached:
-                        st.session_state.genie_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
+                        st.session_state.current_messages = []
+                        st.session_state.current_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
                         assistant_content = f"AI Assistant\n\nYour question: {user_question}\n\n{cached.get('analyst_response', 'No analysis available.')}"
-                        st.session_state.genie_messages.append({"role": "assistant", "content": assistant_content, "response": cached, "timestamp": datetime.now()})
-                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
-                        st.session_state.genie_turn_index += 1
-                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", assistant_content, source="cache", sql_used=cached.get("sql", ""))
-                        st.session_state.genie_turn_index += 1
+                        st.session_state.current_messages.append({"role": "assistant", "content": assistant_content, "response": cached, "timestamp": datetime.now()})
+                        save_chat_message(st.session_state.genie_session_id, 0, "user", user_question)
+                        save_chat_message(st.session_state.genie_session_id, 1, "assistant", assistant_content, source="cache", sql_used=cached.get("sql", ""))
                         save_question(user_question, "custom")
                     else:
                         lower_q = user_question.lower()
@@ -1120,16 +1227,15 @@ def render_genie():
                         else:
                             result = process_custom_query(user_question)
 
+                        st.session_state.current_messages = []
+                        st.session_state.current_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
                         if result.get("layout") != "error":
-                            set_cache(user_question, result)
-                            st.session_state.genie_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
                             assistant_content = f"AI Assistant\n\nYour question: {user_question}\n\n{result.get('analyst_response', 'No analysis available.')}"
-                            st.session_state.genie_messages.append({"role": "assistant", "content": assistant_content, "response": result, "timestamp": datetime.now()})
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
-                            st.session_state.genie_turn_index += 1
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", assistant_content, sql_used=result.get("sql", ""))
-                            st.session_state.genie_turn_index += 1
+                            st.session_state.current_messages.append({"role": "assistant", "content": assistant_content, "response": result, "timestamp": datetime.now()})
+                            set_cache(user_question, result)
+                            save_chat_message(st.session_state.genie_session_id, 0, "user", user_question)
+                            save_chat_message(st.session_state.genie_session_id, 1, "assistant", assistant_content, sql_used=result.get("sql", ""))
                             save_question(user_question, "forecast")
                         else:
-                            st.error(result.get("message", "Query failed"))
+                            st.session_state.current_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
                 st.rerun()
