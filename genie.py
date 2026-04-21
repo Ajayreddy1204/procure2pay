@@ -14,7 +14,7 @@ from quick_analysis import run_quick_analysis
 from config import DATABASE
 
 # ------------------------------------------------------------
-# Cash Flow Forecast handler
+# Cash Flow Forecast handler (unchanged)
 # ------------------------------------------------------------
 def process_cash_flow_forecast(question: str) -> dict:
     cf_sql = f"""
@@ -803,13 +803,13 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
             st.code(result["sql"], language="sql")
 
 # ------------------------------------------------------------
-# Main Genie render function – redesigned UI with square cards
+# Main Genie render function – fully working chat input
 # ------------------------------------------------------------
 def render_genie():
-    # CSS for square cards + overall layout
+    # CSS for rectangle cards + chat styling
     st.markdown("""
     <style>
-    /* Square cards with 1:1 aspect ratio */
+    /* Rectangle cards */
     .genie-card {
         background: white;
         border-radius: 20px;
@@ -821,8 +821,7 @@ def render_genie():
         flex-direction: column;
         justify-content: space-between;
         border: 1px solid #eef2f6;
-        aspect-ratio: 1 / 1;   /* forces square shape */
-        width: 100%;
+        overflow: hidden;
     }
     .genie-card:hover {
         transform: translateY(-4px);
@@ -833,19 +832,25 @@ def render_genie():
         font-weight: 600;
         margin: 0.5rem 0 0.25rem;
         color: #1e293b;
+        line-height: 1.3;
     }
     .genie-card p {
         color: #475569;
         font-size: 0.8rem;
         line-height: 1.4;
         margin-bottom: 1rem;
+        overflow-wrap: break-word;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .card-icon {
-        font-size: 2.2rem;
+        font-size: 2rem;
         text-align: center;
         margin-bottom: 0.5rem;
     }
-    /* Ensure buttons inside cards are properly sized */
     .genie-card .stButton button {
         margin-top: auto;
         width: 100%;
@@ -858,23 +863,6 @@ def render_genie():
     }
     .genie-card .stButton button:hover {
         background-color: #2563eb;
-    }
-    /* Suggestion chips */
-    .suggestion-chip {
-        background: #f1f5f9;
-        border-radius: 40px;
-        padding: 0.4rem 1rem;
-        font-size: 0.8rem;
-        cursor: pointer;
-        transition: all 0.2s;
-        display: inline-block;
-        margin: 0.2rem;
-        border: 1px solid #e2e8f0;
-    }
-    .suggestion-chip:hover {
-        background: #3b82f6;
-        color: white;
-        border-color: #3b82f6;
     }
     /* Chat messages */
     .chat-message-user {
@@ -905,7 +893,13 @@ def render_genie():
     }
     .centered-container {
         text-align: center;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1rem;
+    }
+    /* Input row */
+    .input-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -931,7 +925,7 @@ def render_genie():
         "Invoice Aging": "invoice_aging"
     }
 
-    # Process auto-run query from session state (set by card buttons)
+    # Process auto-run query from card buttons
     auto_query = st.session_state.pop("auto_run_query", None)
     if auto_query:
         st.session_state.genie_messages = []
@@ -940,7 +934,6 @@ def render_genie():
         st.session_state.last_custom_query = auto_query
         with st.spinner("Running analysis..."):
             lower_q = auto_query.lower()
-            # Dispatch to appropriate handler
             if any(kw in lower_q for kw in ["forecast cash outflow", "cash flow forecast", "7, 14, 30, 60, 90"]):
                 result = process_cash_flow_forecast(auto_query)
             elif any(kw in lower_q for kw in ["pay early", "capture discounts", "early payment"]):
@@ -982,7 +975,7 @@ def render_genie():
     st.markdown("## 🧞 Welcome to ProcureIQ Genie")
     st.markdown("Let Genie run one of these quick analyses for you")
 
-    # ----- QUICK ANALYSIS CARDS (4 columns) – SQUARE FORMAT -----
+    # ----- QUICK ANALYSIS CARDS (4 columns) -----
     col1, col2, col3, col4 = st.columns(4)
     cards = [
         ("💰", "Spending Overview", "Track total spend, monthly trends and major changes"),
@@ -1061,7 +1054,7 @@ def render_genie():
         st.markdown("Ask questions about your Procurement to Pay data, or select a pre-built analysis from the library.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Chat history area
+        # Chat history area (scrollable)
         st.markdown('<div class="chat-scrollable">', unsafe_allow_html=True)
         for msg in st.session_state.genie_messages:
             if msg["role"] == "user":
@@ -1113,8 +1106,9 @@ def render_genie():
                         st.error(resp.get("message", "Unknown error"))
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Input form – fixed to work correctly
+        # ----- WORKING INPUT FORM (below chat history) -----
         with st.form(key="genie_form", clear_on_submit=True):
+            # Use columns to place text input and submit button side by side
             col_input, col_btn = st.columns([0.85, 0.15])
             with col_input:
                 prefill_value = st.session_state.pop("genie_prefill", "")
@@ -1126,6 +1120,7 @@ def render_genie():
                 )
             with col_btn:
                 submitted = st.form_submit_button("→", type="primary")
+
             if submitted and user_question:
                 with st.spinner("Generating SQL and insights..."):
                     cached = get_cache(user_question)
