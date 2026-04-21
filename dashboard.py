@@ -1,3 +1,4 @@
+#dashboard.py
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -81,37 +82,146 @@ def inject_dashboard_css():
         font-size: 1.2rem;
         margin-left: 0.25rem;
     }
-    /* Circle Button Styling */
-    .circle-invoice-btn button {
-        background: #d1d5db !important;
-        border-radius: 50% !important;
-        width: 70px !important;
-        height: 70px !important;
-        padding: 0 !important;
-        border: none !important;
-        font-weight: 700 !important;
-        font-size: 0.75rem !important;
-        color: #111827 !important;
-        white-space: pre-line !important;
-        line-height: 1.3 !important;
-        cursor: pointer !important;
+    /* Needs Attention Section */
+    .attention-header {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #111827;
+        margin-bottom: 1rem;
     }
-    .circle-invoice-btn button:hover {
-        background: #9ca3af !important;
-        transform: scale(1.05);
+    .tab-button {
+        border-radius: 25px;
+        padding: 0.5rem 1.5rem;
+        font-weight: 500;
+        border: 1px solid #e5e7eb;
+        background: #f9fafb;
+        color: #374151;
+        cursor: pointer;
+        transition: all 0.2s;
     }
-    .circle-invoice-btn-selected button {
-        background: #3b82f6 !important;
-        color: white !important;
+    .tab-button-active {
+        background: #3b82f6;
+        color: white;
+        border-color: #3b82f6;
     }
-    .circle-invoice-btn-selected button:hover {
-        background: #2563eb !important;
+    /* Invoice Cards */
+    .invoice-card {
+        background: #fff;
+        border-radius: 16px;
+        padding: 1rem;
+        border: 1px solid #e5e7eb;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        min-height: 160px;
+        position: relative;
+    }
+    .invoice-card-overdue {
+        background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+        border: 1px solid #fecaca;
+    }
+    .invoice-card-disputed {
+        background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+        border: 1px solid #fde68a;
+    }
+    .invoice-card-due {
+        background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+        border: 1px solid #bfdbfe;
+    }
+    .invoice-status {
+        display: inline-block;
+        padding: 0.25rem 0.75rem;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .status-overdue {
+        background: #fee2e2;
+        color: #dc2626;
+    }
+    .status-disputed {
+        background: #fef3c7;
+        color: #d97706;
+    }
+    .status-due {
+        background: #dbeafe;
+        color: #2563eb;
+    }
+    .invoice-amount {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #111827;
+    }
+    .invoice-due-date {
+        font-size: 0.8rem;
+        color: #6b7280;
+    }
+    .invoice-vendor {
+        font-size: 0.85rem;
+        color: #374151;
+        font-weight: 500;
+    }
+    /* Charts Section */
+    .chart-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #111827;
+        margin-bottom: 1rem;
     }
     /* Pagination */
     .pagination-info {
         text-align: center;
         color: #6b7280;
         font-size: 0.9rem;
+    }
+    /* Clickable Invoice Circle Button */
+    .invoice-circle-btn {
+        background: #d1d5db;
+        border-radius: 50%;
+        width: 70px;
+        height: 70px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        cursor: pointer;
+        border: none;
+        transition: all 0.2s ease;
+        text-decoration: none;
+    }
+    .invoice-circle-btn:hover {
+        background: #9ca3af;
+        transform: scale(1.05);
+    }
+    .invoice-circle-btn-selected {
+        background: #3b82f6;
+    }
+    .invoice-circle-btn-selected:hover {
+        background: #2563eb;
+    }
+    .invoice-circle-btn-selected .inv-top,
+    .invoice-circle-btn-selected .inv-bottom {
+        color: white;
+    }
+    .inv-top {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #111827;
+        line-height: 1.2;
+    }
+    .inv-bottom {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: #6b7280;
+        line-height: 1.2;
+    }
+    /* Hide default streamlit button styling for circle buttons */
+    .stButton > button[data-testid="baseButton-secondary"].circle-btn {
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        box-shadow: none !important;
     }
 </style>
 """,
@@ -126,9 +236,12 @@ def format_invoice_number(invoice_num):
     """Convert invoice number to integer string, removing any decimal points."""
     if invoice_num is None:
         return ""
+    # Convert to string first
     inv_str = str(invoice_num)
+    # Remove .0 if present (handles float conversion)
     if inv_str.endswith('.0'):
         inv_str = inv_str[:-2]
+    # Try to convert to int and back to string to remove any decimals
     try:
         inv_str = str(int(float(inv_str)))
     except (ValueError, TypeError):
@@ -322,17 +435,20 @@ def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, star
 
 
 # ------------------------------------------------------------
-# Helper: Navigate to Invoices Tab
+# Helper: Navigate to Invoice Tab
 # ------------------------------------------------------------
 def navigate_to_invoice(invoice_number):
-    """Set session state to navigate to the Invoices tab with a specific invoice."""
+    """Set session state to navigate to invoice tab with specific invoice."""
+    # Store the invoice number to search for
     st.session_state.search_invoice_number = format_invoice_number(invoice_number)
+    # Set the active tab to "Invoices"
     st.session_state.active_tab = "Invoices"
+    # Trigger rerun to navigate
     st.rerun()
 
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section with Clickable Circle Buttons (everything inside card)
+# Helper: Needs Attention Section with Clickable Invoice Circles
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     if "na_tab" not in st.session_state:
@@ -409,17 +525,11 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     if active_tab == "Overdue":
         condition = "f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE'"
         status_label = "Overdue"
-        card_bg = "linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)"
-        card_border = "#fecaca"
-        status_bg = "#fee2e2"
-        status_color = "#dc2626"
+        status_class = "status-overdue"
     elif active_tab == "Disputed":
         condition = "UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED')"
         status_label = "Disputed"
-        card_bg = "linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)"
-        card_border = "#fde68a"
-        status_bg = "#fef3c7"
-        status_color = "#d97706"
+        status_class = "status-disputed"
     else:
         condition = (
             "f.due_date >= CURRENT_DATE "
@@ -427,10 +537,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
             "AND UPPER(f.invoice_status) = 'OPEN'"
         )
         status_label = "Due"
-        card_bg = "linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)"
-        card_border = "#bfdbfe"
-        status_bg = "#dbeafe"
-        status_color = "#2563eb"
+        status_class = "status-due"
 
     attention_sql = f"""
         SELECT f.invoice_number,
@@ -450,99 +557,154 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     if attention_df.empty:
         attention_df = pd.DataFrame(
             [
-                {"invoice_number": 9001767, "amount": 3300, "vendor_name": "McMaster-Carr", "due_date": "2026-02-01"},
-                {"invoice_number": 9004648, "amount": 2600, "vendor_name": "MSC Industrial", "due_date": "2026-02-12"},
-                {"invoice_number": 9006459, "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
-                {"invoice_number": 9005389, "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
-                {"invoice_number": 9005677, "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
-                {"invoice_number": 9004607, "amount": 2200, "vendor_name": "McMaster-Carr", "due_date": "2026-02-19"},
-                {"invoice_number": 9007488, "amount": 15400, "vendor_name": "MSC Industrial", "due_date": "2026-02-19"},
-                {"invoice_number": 9006418, "amount": 1600, "vendor_name": "Emerson Electric", "due_date": "2026-02-19"},
+                {
+                    "invoice_number": 9005389,
+                    "amount": 13800,
+                    "vendor_name": "Motion Industries",
+                    "due_date": "2026-02-12",
+                },
+                {
+                    "invoice_number": 9006459,
+                    "amount": 1900,
+                    "vendor_name": "Eaton Corp",
+                    "due_date": "2026-02-12",
+                },
+                {
+                    "invoice_number": 9005677,
+                    "amount": 19900,
+                    "vendor_name": "Honeywell Intl",
+                    "due_date": "2026-02-19",
+                },
+                {
+                    "invoice_number": 9004607,
+                    "amount": 2200,
+                    "vendor_name": "McMaster-Carr",
+                    "due_date": "2026-02-19",
+                },
+                {
+                    "invoice_number": 9007488,
+                    "amount": 15400,
+                    "vendor_name": "MSC Industrial",
+                    "due_date": "2026-02-19",
+                },
+                {
+                    "invoice_number": 9006418,
+                    "amount": 1600,
+                    "vendor_name": "Emerson Electric",
+                    "due_date": "2026-02-19",
+                },
+                {
+                    "invoice_number": 9008270,
+                    "amount": 13400,
+                    "vendor_name": "Sonepar USA",
+                    "due_date": "2026-02-23",
+                },
+                {
+                    "invoice_number": 9000738,
+                    "amount": 2800,
+                    "vendor_name": "Emerson Electric",
+                    "due_date": "2026-02-25",
+                },
             ]
         )
         attention_df["due_date"] = pd.to_datetime(attention_df["due_date"])
 
     # Pagination
-    items_per_page = 4
+    items_per_page = 8
     total_items = len(attention_df)
     total_pages = max(1, math.ceil(total_items / items_per_page))
     start_idx = page * items_per_page
     end_idx = start_idx + items_per_page
     page_df = attention_df.iloc[start_idx:end_idx]
 
-    # Render cards in 4-column grid
-    cols = st.columns(4)
-    for idx, (_, row) in enumerate(page_df.iterrows()):
-        inv_num = format_invoice_number(row["invoice_number"])
-        inv_top, inv_bottom = split_invoice_number(row["invoice_number"])
-        amt = abbr_currency(safe_number(row["amount"]))
-        vendor = row["vendor_name"] if pd.notna(row["vendor_name"]) else "Unknown Vendor"
-        due = pd.to_datetime(row["due_date"]).strftime("%Y-%m-%d") if pd.notna(row["due_date"]) else ""
-
-        # Determine circle button class (selected or not)
-        circle_class = "circle-invoice-btn-selected" if st.session_state.selected_invoice == inv_num else "circle-invoice-btn"
-
-        with cols[idx % 4]:
-            # Open card div with background and border
-            st.markdown(
-                f"""
-<div style="background: {card_bg}; border: 1px solid {card_border}; border-radius: 16px; padding: 1rem; min-height: 160px;">
-                """,
-                unsafe_allow_html=True,
-            )
-
-            # Two-column layout inside card
-            left_col, right_col = st.columns([1, 1.2])
-            with left_col:
-                # Wrap button in div with circle class
-                st.markdown(f'<div class="{circle_class}">', unsafe_allow_html=True)
-                button_label = f"{inv_top}\n{inv_bottom}" if inv_bottom else inv_top
-                if st.button(
-                    button_label,
-                    key=f"inv_btn_{page}_{idx}_{inv_num}",
-                    help=f"Click to view invoice {inv_num}",
-                ):
-                    navigate_to_invoice(inv_num)
-                st.markdown('</div>', unsafe_allow_html=True)
-
-            with right_col:
-                # Status badge and amount
-                st.markdown(
-                    f"""
-<div style="text-align: right; padding-top: 0.5rem;">
-    <span style="
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        background: {status_bg};
-        color: {status_color};
-    ">{status_label}</span>
-    <div style="
-        font-size: 1.25rem;
-        font-weight: 700;
-        color: #111827;
-        margin-top: 0.5rem;
-    ">{amt}</div>
-</div>
-                    """,
-                    unsafe_allow_html=True,
+    # Render cards in 4-column grid (2 rows of 4)
+    for row_start in range(0, len(page_df), 4):
+        cols = st.columns(4)
+        for col_idx in range(4):
+            item_idx = row_start + col_idx
+            if item_idx < len(page_df):
+                row = page_df.iloc[item_idx]
+                inv_num = format_invoice_number(row["invoice_number"])
+                inv_top, inv_bottom = split_invoice_number(row["invoice_number"])
+                amt = abbr_currency(safe_number(row["amount"]))
+                vendor = (
+                    row["vendor_name"]
+                    if pd.notna(row["vendor_name"])
+                    else "Unknown Vendor"
+                )
+                due = (
+                    pd.to_datetime(row["due_date"]).strftime("%Y-%m-%d")
+                    if pd.notna(row["due_date"])
+                    else ""
                 )
 
-            # Due date and vendor row
-            st.markdown(
-                f"""
-<div style="margin-top: 0.75rem; padding-top: 0.5rem; border-top: 1px solid rgba(0,0,0,0.05);">
-    <div style="font-size: 0.8rem; color: #6b7280;">Due: {due}</div>
-    <div style="font-size: 0.85rem; color: #374151; font-weight: 500; margin-top: 0.25rem;">{vendor}</div>
-</div>
-                """,
-                unsafe_allow_html=True,
-            )
+                # Determine if this invoice is selected
+                is_selected = st.session_state.selected_invoice == inv_num
 
-            # Close card div
-            st.markdown('</div>', unsafe_allow_html=True)
+                # Determine background color based on status
+                if status_label == "Overdue":
+                    bg_style = "background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border: 1px solid #fecaca;"
+                elif status_label == "Disputed":
+                    bg_style = "background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border: 1px solid #fde68a;"
+                else:
+                    bg_style = "background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border: 1px solid #bfdbfe;"
+
+                # Circle button styling - blue if selected, gray otherwise
+                circle_bg = "#3b82f6" if is_selected else "#d1d5db"
+                text_color_top = "white" if is_selected else "#111827"
+                text_color_bottom = "white" if is_selected else "#6b7280"
+
+                with cols[col_idx]:
+                    # Create unique key for this card
+                    card_key = f"card_{page}_{item_idx}_{inv_num}"
+
+                    # Render the card with clickable circle using a form to handle the click
+                    st.markdown(
+                        f"""
+<div style="{bg_style} border-radius: 16px; padding: 1rem; min-height: 150px;">
+<div style="display: flex; justify-content: space-between; align-items: flex-start;">
+<div id="circle_{card_key}" style="
+                                    background: {circle_bg};
+                                    border-radius: 50%;
+                                    width: 70px;
+                                    height: 70px;
+                                    display: flex;
+                                    flex-direction: column;
+                                    justify-content: center;
+                                    align-items: center;
+                                    cursor: pointer;
+                                    transition: all 0.2s ease;
+                                ">
+<div style="font-size: 1rem; font-weight: 700; color: {text_color_top}; line-height: 1.2;">{inv_top}</div>
+<div style="font-size: 1.2rem; font-weight: 700; color: {text_color_bottom}; line-height: 1.2;">{inv_bottom}</div>
+</div>
+<div style="text-align: right;">
+<span class="invoice-status {status_class}">{status_label}</span>
+<div class="invoice-amount" style="margin-top: 0.5rem;">{amt}</div>
+</div>
+</div>
+<div style="margin-top: 0.75rem;">
+<div class="invoice-due-date">Due: {due}</div>
+<div class="invoice-vendor">{vendor}</div>
+</div>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
+                    # Invisible button overlaid on the card area for click handling
+                    # Using columns to position the button over the circle area
+                    btn_col1, btn_col2 = st.columns([1, 2])
+                    with btn_col1:
+                        if st.button(
+                            "⠀",  # Invisible character
+                            key=f"inv_click_{card_key}",
+                            help=f"Click to view invoice {inv_num}",
+                            use_container_width=True,
+                        ):
+                            navigate_to_invoice(inv_num)
+
+        st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
 
     # Pagination controls
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
@@ -553,11 +715,16 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
             st.rerun()
     with col_info:
         st.markdown(
-            f"<p style='text-align: center; color: #6b7280; font-size: 0.9rem;'>{page + 1} of {total_pages}</p>",
+            f"<p class='pagination-info'>{page + 1} of {total_pages}</p>",
             unsafe_allow_html=True,
         )
     with col_next:
-        if st.button("Next →", disabled=(page >= total_pages - 1), use_container_width=True, key="na_next"):
+        if st.button(
+            "Next →",
+            disabled=(page >= total_pages - 1),
+            use_container_width=True,
+            key="na_next",
+        ):
             st.session_state.na_page += 1
             st.rerun()
 
