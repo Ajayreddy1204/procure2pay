@@ -616,40 +616,47 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                 circle_class = "circle-invoice-btn-selected" if is_selected else "circle-invoice-btn"
 
                 with cols[col_idx]:
-                    # Card container with background
+                    # Open the card div
+                    st.markdown(f'<div class="invoice-card {card_class}">', unsafe_allow_html=True)
+                    
+                    # Two-column layout inside card
+                    left_col, right_col = st.columns([1, 1.3])
+                    with left_col:
+                        # Circle button
+                        button_label = f"{inv_top}\n{inv_bottom}" if inv_bottom else inv_top
+                        if st.button(
+                            button_label,
+                            key=f"inv_btn_{page}_{item_idx}_{inv_num}",
+                            help=f"{inv_num}",
+                            use_container_width=False,
+                        ):
+                            navigate_to_invoice(inv_num)
+                    with right_col:
+                        # Status and amount
+                        st.markdown(
+                            f"""
+                            <div style="text-align: right;">
+                                <span class="invoice-status {status_class}">{status_label}</span>
+                                <div class="invoice-amount" style="margin-top: 0.5rem;">{amt}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    
+                    # Due date and vendor row
                     st.markdown(
                         f"""
-<div class="invoice-card {card_class}">
-    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-        <div class="{circle_class}">
-""",
+                        <div style="margin-top: 0.75rem;">
+                            <div class="invoice-due-date">Due: {due}</div>
+                            <div class="invoice-vendor">{vendor}</div>
+                        </div>
+                        """,
                         unsafe_allow_html=True,
                     )
-                    # The clickable circle button
-                    button_label = f"{inv_top}\n{inv_bottom}" if inv_bottom else inv_top
-                    if st.button(
-                        button_label,
-                        key=f"inv_btn_{page}_{item_idx}_{inv_num}",
-                        help=f"{inv_num}",
-                        use_container_width=False,
-                    ):
-                        navigate_to_invoice(inv_num)
-                    st.markdown(
-                        f"""
-        </div>
-        <div style="text-align: right;">
-            <span class="invoice-status {status_class}">{status_label}</span>
-            <div class="invoice-amount" style="margin-top: 0.5rem;">{amt}</div>
-        </div>
-    </div>
-    <div style="margin-top: 0.75rem;">
-        <div class="invoice-due-date">Due: {due}</div>
-        <div class="invoice-vendor">{vendor}</div>
-    </div>
-</div>
-""",
-                        unsafe_allow_html=True,
-                    )
+                    
+                    # Close the card div
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
         st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
 
     # Pagination controls
