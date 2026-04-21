@@ -85,7 +85,7 @@ def render_filters():
     return st.session_state.date_range[0], st.session_state.date_range[1], st.session_state.selected_vendor
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section (colored cards, clickable pill)
+# Helper: Needs Attention Section (colored cards, all content inside)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     # Session state for tabs and pagination
@@ -222,7 +222,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     end_idx = min(start_idx + items_per_page, total_items)
     page_df = attention_df.iloc[start_idx:end_idx]
 
-    # CSS for colored cards and pill button
+    # CSS for colored cards – ensures the whole card gets the background
     st.markdown(f"""
     <style>
     /* Pill tabs styling */
@@ -231,7 +231,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         padding: 0.4rem 0.8rem !important;
         font-weight: 500 !important;
     }}
-    /* Card container – uses dynamic background color */
+    /* Card container – applied to the outer div that encloses all card content */
     .attention-card {{
         background-color: {card_bg};
         border-radius: 20px;
@@ -248,23 +248,21 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         transform: translateY(-3px);
         box-shadow: 0 8px 20px rgba(0,0,0,0.1);
     }}
-    /* Pill button for invoice number */
-    .invoice-pill {{
-        background-color: #3b82f6;
-        color: white;
-        border-radius: 9999px;
-        padding: 8px 16px;
-        font-size: 1rem;
-        font-weight: 600;
-        text-align: center;
-        display: inline-block;
-        margin-bottom: 12px;
-        cursor: pointer;
-        border: none;
-        width: auto;
+    /* The button inside the card – style as pill */
+    .attention-card button {{
+        background-color: #3b82f6 !important;
+        color: white !important;
+        border-radius: 9999px !important;
+        padding: 8px 16px !important;
+        font-size: 1rem !important;
+        font-weight: 600 !important;
+        border: none !important;
+        width: auto !important;
+        margin-bottom: 12px !important;
+        display: inline-block !important;
     }}
-    .invoice-pill:hover {{
-        background-color: #2563eb;
+    .attention-card button:hover {{
+        background-color: #2563eb !important;
     }}
     /* Status label */
     .status-label {{
@@ -273,7 +271,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         padding: 4px 12px;
         border-radius: 20px;
         display: inline-block;
-        margin-left: auto;
     }}
     /* Amount */
     .card-amount {{
@@ -294,6 +291,10 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         font-size: 0.85rem;
         color: #6b7280;
     }}
+    /* Ensure columns inside card don't add extra background */
+    .attention-card .stColumn {{
+        background: transparent !important;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -303,21 +304,26 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         vendor = row['vendor_name'] if pd.notna(row['vendor_name']) else "Unknown"
         due_date = row['due_date'].strftime('%Y-%m-%d') if pd.notna(row['due_date']) else ""
 
-        with st.container():
-            # Row 1: invoice pill (left) and status badge (right)
-            col_pill, col_status = st.columns([1, 1])
-            with col_pill:
-                if st.button(str(inv_num), key=f"inv_pill_{inv_num}", help="View invoice details", use_container_width=True):
-                    st.session_state.selected_invoice = str(inv_num)
-                    st.session_state.page = "Invoices"
-                    st.rerun()
-            with col_status:
-                st.markdown(f'<div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>', unsafe_allow_html=True)
-            
-            # Amount, vendor, due date
-            st.markdown(f'<div class="card-amount">{abbr_currency(amount)}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="vendor-name">{vendor}</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="due-date">Due: {due_date}</div>', unsafe_allow_html=True)
+        # Open the card div
+        st.markdown('<div class="attention-card">', unsafe_allow_html=True)
+        
+        # Row 1: invoice pill (left) and status badge (right)
+        col_pill, col_status = st.columns([1, 1])
+        with col_pill:
+            if st.button(str(inv_num), key=f"inv_pill_{inv_num}", help="View invoice details", use_container_width=True):
+                st.session_state.selected_invoice = str(inv_num)
+                st.session_state.page = "Invoices"
+                st.rerun()
+        with col_status:
+            st.markdown(f'<div class="status-label" style="background-color: {status_bg}; color: {status_color};">{status_label}</div>', unsafe_allow_html=True)
+        
+        # Amount, vendor, due date
+        st.markdown(f'<div class="card-amount">{abbr_currency(amount)}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="vendor-name">{vendor}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="due-date">Due: {due_date}</div>', unsafe_allow_html=True)
+        
+        # Close the card div
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # Display cards in rows of 4
     for i in range(0, len(page_df), 4):
@@ -325,10 +331,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         for j in range(4):
             if i + j < len(page_df):
                 with cols[j]:
-                    with st.container():
-                        st.markdown('<div class="attention-card">', unsafe_allow_html=True)
-                        render_card(page_df.iloc[i + j])
-                        st.markdown('</div>', unsafe_allow_html=True)
+                    render_card(page_df.iloc[i + j])
 
     # Pagination controls
     col_prev, col_info, col_next = st.columns([1,2,1])
