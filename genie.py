@@ -14,12 +14,22 @@ from quick_analysis import run_quick_analysis
 from config import DATABASE
 
 # ------------------------------------------------------------
+# Helper to safely convert sql_used to string
+# ------------------------------------------------------------
+def _safe_sql_string(sql_val):
+    if sql_val is None:
+        return ""
+    if isinstance(sql_val, (dict, list)):
+        return json.dumps(sql_val)
+    return str(sql_val)
+
+# ------------------------------------------------------------
 # SQL generation – template‑based with fallback to LLM
 # ------------------------------------------------------------
 def get_sql_for_question(question: str) -> str:
     q = question.lower()
     
-    # 1. Total spend YTD (exact phrases)
+    # 1. Total spend YTD
     if ("total spend" in q or "spend ytd" in q or "year-to-date spend" in q) and ("ytd" in q or "year to date" in q):
         return f"""
             SELECT
@@ -239,7 +249,6 @@ def process_custom_query(query: str) -> dict:
     if df.empty:
         return {"layout": "error", "message": "Query returned no data. Try rephrasing your question."}
     
-    # Generate insights using Bedrock Nova
     data_preview = df.head(10).to_string(index=False, max_colwidth=40)
     prompt = f"""
 You are a senior procurement analyst. The user asked: "{query}".
@@ -273,7 +282,7 @@ Respond in plain text using markdown for headings and bullet points. Do not incl
     }
 
 # ------------------------------------------------------------
-# Specialised handlers (full implementations – same as before)
+# Specialised handlers (full implementations)
 # ------------------------------------------------------------
 def process_cash_flow_forecast(question: str) -> dict:
     cf_sql = f"""
@@ -633,7 +642,7 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
         "layout": "grir_root_causes",
         "df": aging_df.to_dict(orient="records") if not aging_df.empty else [],
         "extra_df": balance_df.to_dict(orient="records") if not balance_df.empty else [],
-        "sql": f"{aging_sql}\n\n{balance_sql}",
+        "sql": {"aging_sql": aging_sql, "balance_sql": balance_sql},
         "analyst_response": analyst_text,
         "question": question
     }
@@ -723,7 +732,7 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     }
 
 # ------------------------------------------------------------
-# Rendering functions (same as before)
+# Rendering functions (unchanged but use _safe_sql_string for SQL display)
 # ------------------------------------------------------------
 def render_cash_flow_response(result: dict):
     df = pd.DataFrame(result["df"])
@@ -751,7 +760,7 @@ def render_cash_flow_response(result: dict):
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
     with st.expander("View SQL used"):
-        st.code(result["sql"], language="sql")
+        st.code(_safe_sql_string(result.get("sql")), language="sql")
 
 def render_early_payment_response(result: dict):
     df = pd.DataFrame(result["df"])
@@ -772,7 +781,7 @@ def render_early_payment_response(result: dict):
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
     with st.expander("View SQL used"):
-        st.code(result["sql"], language="sql")
+        st.code(_safe_sql_string(result.get("sql")), language="sql")
 
 def render_payment_timing_response(result: dict):
     df = pd.DataFrame(result["df"])
@@ -785,7 +794,7 @@ def render_payment_timing_response(result: dict):
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
     with st.expander("View SQL used"):
-        st.code(result["sql"], language="sql")
+        st.code(_safe_sql_string(result.get("sql")), language="sql")
 
 def render_late_payment_trend_response(result: dict):
     df = pd.DataFrame(result["df"])
@@ -807,7 +816,7 @@ def render_late_payment_trend_response(result: dict):
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
     with st.expander("View SQL used"):
-        st.code(result["sql"], language="sql")
+        st.code(_safe_sql_string(result.get("sql")), language="sql")
 
 def render_grir_hotspots(result: dict):
     df = pd.DataFrame(result["df"])
@@ -823,7 +832,7 @@ def render_grir_hotspots(result: dict):
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
     with st.expander("View SQL used"):
-        st.code(result["sql"], language="sql")
+        st.code(_safe_sql_string(result.get("sql")), language="sql")
 
 def render_grir_root_causes(result: dict):
     df = pd.DataFrame(result.get("df", []))
@@ -838,7 +847,7 @@ def render_grir_root_causes(result: dict):
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
     with st.expander("View SQL used"):
-        st.code(result["sql"], language="sql")
+        st.code(_safe_sql_string(result.get("sql")), language="sql")
 
 def render_grir_working_capital(result: dict):
     metrics = result.get("metrics", {})
@@ -855,7 +864,7 @@ def render_grir_working_capital(result: dict):
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
     with st.expander("View SQL used"):
-        st.code(result["sql"], language="sql")
+        st.code(_safe_sql_string(result.get("sql")), language="sql")
 
 def render_grir_vendor_followup(result: dict):
     df = pd.DataFrame(result["df"])
@@ -866,7 +875,7 @@ def render_grir_vendor_followup(result: dict):
         st.markdown("### 💡 Key Insights")
         st.markdown(result["analyst_response"])
     with st.expander("View SQL used"):
-        st.code(result["sql"], language="sql")
+        st.code(_safe_sql_string(result.get("sql")), language="sql")
 
 def render_quick_analysis_response(result: dict):
     # Generate AI response if missing
@@ -1079,7 +1088,9 @@ def render_genie():
                 assistant_content = f"AI Assistant\n\nYour question: {auto_query}\n\n{result.get('analyst_response', 'No analysis available.')}"
                 st.session_state.current_messages.append({"role": "assistant", "content": assistant_content, "response": result, "timestamp": datetime.now()})
                 save_chat_message(st.session_state.genie_session_id, 0, "user", auto_query)
-                save_chat_message(st.session_state.genie_session_id, 1, "assistant", assistant_content, sql_used=result.get("sql", ""))
+                # Convert sql_used to string safely
+                sql_used = _safe_sql_string(result.get("sql"))
+                save_chat_message(st.session_state.genie_session_id, 1, "assistant", assistant_content, sql_used=sql_used)
                 save_question(auto_query, "forecast")
                 set_cache(auto_query, result)
             else:
@@ -1195,7 +1206,7 @@ def render_genie():
                             if chart:
                                 st.altair_chart(chart, use_container_width=True)
                         with st.expander("View SQL used"):
-                            st.code(resp["sql"], language="sql")
+                            st.code(_safe_sql_string(resp.get("sql")), language="sql")
                     elif layout == "error":
                         st.error(resp.get("message", "Unknown error"))
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1223,7 +1234,8 @@ def render_genie():
                         assistant_content = f"AI Assistant\n\nYour question: {user_question}\n\n{cached.get('analyst_response', 'No analysis available.')}"
                         st.session_state.current_messages.append({"role": "assistant", "content": assistant_content, "response": cached, "timestamp": datetime.now()})
                         save_chat_message(st.session_state.genie_session_id, 0, "user", user_question)
-                        save_chat_message(st.session_state.genie_session_id, 1, "assistant", assistant_content, source="cache", sql_used=cached.get("sql", ""))
+                        sql_used = _safe_sql_string(cached.get("sql"))
+                        save_chat_message(st.session_state.genie_session_id, 1, "assistant", assistant_content, source="cache", sql_used=sql_used)
                         save_question(user_question, "custom")
                     else:
                         lower_q = user_question.lower()
@@ -1255,7 +1267,8 @@ def render_genie():
                             st.session_state.current_messages.append({"role": "assistant", "content": assistant_content, "response": result, "timestamp": datetime.now()})
                             set_cache(user_question, result)
                             save_chat_message(st.session_state.genie_session_id, 0, "user", user_question)
-                            save_chat_message(st.session_state.genie_session_id, 1, "assistant", assistant_content, sql_used=result.get("sql", ""))
+                            sql_used = _safe_sql_string(result.get("sql"))
+                            save_chat_message(st.session_state.genie_session_id, 1, "assistant", assistant_content, sql_used=sql_used)
                             save_question(user_question, "forecast")
                         else:
                             st.session_state.current_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
