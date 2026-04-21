@@ -16,11 +16,6 @@ from utils import (
     safe_number,
     safe_int,
     abbr_currency,
-    kpi_tile,
-    alt_bar,
-    alt_line_monthly,
-    alt_donut_status,
-    clean_invoice_number,
 )
 
 
@@ -84,28 +79,6 @@ def inject_dashboard_css():
         font-size: 1.2rem;
         margin-left: 0.25rem;
     }
-    /* Needs Attention Section */
-    .attention-header {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: #111827;
-        margin-bottom: 1rem;
-    }
-    .tab-button {
-        border-radius: 25px;
-        padding: 0.5rem 1.5rem;
-        font-weight: 500;
-        border: 1px solid #e5e7eb;
-        background: #f9fafb;
-        color: #374151;
-        cursor: pointer;
-        transition: all 0.2s;
-    }
-    .tab-button-active {
-        background: #3b82f6;
-        color: white;
-        border-color: #3b82f6;
-    }
     /* Invoice Cards */
     .invoice-card {
         background: #fff;
@@ -116,6 +89,7 @@ def inject_dashboard_css():
         flex-direction: column;
         gap: 0.5rem;
         min-height: 140px;
+        position: relative;
     }
     .invoice-card-overdue {
         background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
@@ -125,11 +99,6 @@ def inject_dashboard_css():
     }
     .invoice-card-due {
         background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-    }
-    .invoice-number {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #111827;
     }
     .invoice-status {
         display: inline-block;
@@ -164,12 +133,27 @@ def inject_dashboard_css():
         color: #374151;
         font-weight: 500;
     }
-    /* Charts Section */
-    .chart-title {
-        font-size: 1.25rem;
+    /* Link-like button for invoice number */
+    .stButton > button.invoice-link-btn {
+        background: none !important;
+        border: none !important;
+        padding: 0 !important;
+        font-family: inherit;
+        font-size: 1.1rem;
         font-weight: 700;
         color: #111827;
-        margin-bottom: 1rem;
+        text-decoration: underline;
+        cursor: pointer;
+        box-shadow: none !important;
+        margin: 0 0 0.25rem 0 !important;
+        height: auto;
+        line-height: 1.2;
+        display: inline-block;
+    }
+    .stButton > button.invoice-link-btn:hover {
+        color: #3b82f6;
+        background: none !important;
+        border-color: transparent !important;
     }
     /* Pagination */
     .pagination-info {
@@ -184,7 +168,7 @@ def inject_dashboard_css():
 
 
 # ------------------------------------------------------------
-# Helper: Render KPI Card with custom styling
+# Helper: Render KPI Card
 # ------------------------------------------------------------
 def render_kpi_card(title, value, delta=None, is_positive=True, color_class="yellow"):
     delta_html = ""
@@ -276,50 +260,42 @@ def render_filters():
 
 
 # ------------------------------------------------------------
-# Helper: KPI Rows (matching exact layout from images)
+# Helper: KPI Rows
 # ------------------------------------------------------------
-def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, start_lit, end_lit):
-    # Extract current values
+def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df):
     cur_active_pos = safe_int(cur_df.loc[0, "active_pos"]) if not cur_df.empty else 147
     cur_total_pos = safe_int(cur_df.loc[0, "total_pos"]) if not cur_df.empty else 474
     cur_active_vendors = safe_int(cur_df.loc[0, "active_vendors"]) if not cur_df.empty else 38
     cur_pending = safe_int(cur_df.loc[0, "pending_inv"]) if not cur_df.empty else 180
     cur_avg_processing = safe_number(cur_df.loc[0, "avg_processing_days"]) if not cur_df.empty else 70.9
 
-    # Extract previous values
     prev_active_pos = safe_int(prev_df.loc[0, "active_pos"]) if not prev_df.empty else 73
     prev_total_pos = safe_int(prev_df.loc[0, "total_pos"]) if not prev_df.empty else 857
     prev_active_vendors = safe_int(prev_df.loc[0, "active_vendors"]) if not prev_df.empty else 60
     prev_pending = safe_int(prev_df.loc[0, "pending_inv"]) if not prev_df.empty else 90
     prev_avg_processing = safe_number(prev_df.loc[0, "avg_processing_days"]) if not prev_df.empty else 71.0
 
-    # Compute deltas
     spend_delta, spend_up = pct_delta(cur_spend, prev_spend)
     active_pos_delta, active_pos_up = pct_delta(cur_active_pos, prev_active_pos)
     total_pos_delta, total_pos_up = pct_delta(cur_total_pos, prev_total_pos)
     active_vendors_delta, active_vendors_up = pct_delta(cur_active_vendors, prev_active_vendors)
     pending_delta, pending_up = pct_delta(cur_pending, prev_pending)
 
-    # Avg processing time delta
     avg_delta = cur_avg_processing - prev_avg_processing
     avg_delta_str = f"{abs(avg_delta):.1f}d"
-    avg_up = avg_delta < 0  # Lower is better for processing time
+    avg_up = avg_delta < 0
 
-    # First pass rate
     total_inv = safe_int(fp_df.loc[0, "total_inv"]) if not fp_df.empty else 500
     fp_inv = safe_int(fp_df.loc[0, "first_pass_inv"]) if not fp_df.empty else 302
     first_pass_rate = (fp_inv / total_inv * 100) if total_inv > 0 else 60.5
-    prev_fp_rate = 59.8
-    fp_delta = first_pass_rate - prev_fp_rate
+    fp_delta = first_pass_rate - 59.8
     fp_delta_str = f"{abs(fp_delta):.1f}%"
     fp_up = fp_delta > 0
 
-    # Auto rate
     total_cleared = safe_int(auto_df.loc[0, "total_cleared"]) if not auto_df.empty else 0
     auto_proc = safe_int(auto_df.loc[0, "auto_processed"]) if not auto_df.empty else 0
     auto_rate = (auto_proc / total_cleared * 100) if total_cleared > 0 else 0.0
 
-    # ----- ROW 1: 4 KPI Cards -----
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         render_kpi_card("TOTAL SPEND", abbr_currency(cur_spend), spend_delta, spend_up, "yellow")
@@ -332,7 +308,6 @@ def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, star
 
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
 
-    # ----- ROW 2: 4 KPI Cards -----
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         render_kpi_card("PENDING INVOICES", f"{cur_pending:,}", pending_delta, not pending_up, "yellow")
@@ -345,7 +320,7 @@ def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, star
 
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section
+# Helper: Needs Attention Section with clickable invoice numbers
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     if "na_tab" not in st.session_state:
@@ -356,7 +331,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     active_tab = st.session_state.na_tab
     page = st.session_state.na_page
 
-    # Get counts
+    # Count queries
     counts_sql = f"""
         SELECT
             SUM(CASE WHEN f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE' THEN 1 ELSE 0 END) AS overdue_count,
@@ -372,7 +347,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     due_count = safe_int(cnt_df.loc[0, "due_count"]) if not cnt_df.empty else 3
     total_attention = overdue_count + disputed_count + due_count
 
-    # Header
     st.markdown(f"<h2 style='font-weight: 700; margin-bottom: 1rem;'>Needs Attention ({total_attention})</h2>", unsafe_allow_html=True)
 
     # Tab buttons
@@ -380,6 +354,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     with tab_cols[0]:
         if st.button(
             f"Overdue ({overdue_count})",
+            key="na_tab_overdue",
             use_container_width=True,
             type="primary" if active_tab == "Overdue" else "secondary",
         ):
@@ -389,6 +364,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     with tab_cols[1]:
         if st.button(
             f"Disputed ({disputed_count})",
+            key="na_tab_disputed",
             use_container_width=True,
             type="primary" if active_tab == "Disputed" else "secondary",
         ):
@@ -398,6 +374,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     with tab_cols[2]:
         if st.button(
             f"Due ({due_count})",
+            key="na_tab_due",
             use_container_width=True,
             type="primary" if active_tab == "Due" else "secondary",
         ):
@@ -407,7 +384,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
 
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
 
-    # Query based on tab
+    # Condition based on tab
     if active_tab == "Overdue":
         condition = "f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE'"
         status_label = "Overdue"
@@ -428,6 +405,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         card_class = "invoice-card-due"
         status_class = "status-due"
 
+    # Query data
     attention_sql = f"""
         SELECT f.invoice_number,
                f.invoice_amount_local AS amount,
@@ -442,11 +420,11 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     """
     attention_df = run_query(attention_sql)
 
-    # Fallback data matching images
+    # Fallback data if empty
     if attention_df.empty:
         attention_df = pd.DataFrame(
             [
-                {"invoice_number": "90017", "amount": 3300, "vendor_name": "McMaster-Carr", "due_date": "2026-02-01"},
+                {"invoice_number": "9001767", "amount": 3300, "vendor_name": "McMaster-Carr", "due_date": "2026-02-01"},
                 {"invoice_number": "90053", "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
                 {"invoice_number": "90064", "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
                 {"invoice_number": "90056", "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
@@ -458,15 +436,18 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         )
         attention_df["due_date"] = pd.to_datetime(attention_df["due_date"])
 
+    # Remove .0 from invoice numbers
+    attention_df["invoice_number"] = attention_df["invoice_number"].astype(str).str.replace(r'\.0$', '', regex=True)
+
     # Pagination
     items_per_page = 8
     total_items = len(attention_df)
     total_pages = max(1, math.ceil(total_items / items_per_page))
     start_idx = page * items_per_page
     end_idx = start_idx + items_per_page
-    page_df = attention_df.iloc[start_idx:end_idx]
+    page_df = attention_df.iloc[start_idx:end_idx].reset_index(drop=True)
 
-    # Render cards in 4-column grid (2 rows of 4)
+    # Render cards in 4-column grid
     for row_start in range(0, len(page_df), 4):
         cols = st.columns(4)
         for col_idx in range(4):
@@ -474,23 +455,20 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
             if item_idx < len(page_df):
                 row = page_df.iloc[item_idx]
                 inv_num = str(row["invoice_number"])
-                inv_display_1 = inv_num[:5] if len(inv_num) >= 5 else inv_num
-                inv_display_2 = inv_num[5:] if len(inv_num) > 5 else ""
                 amt = abbr_currency(safe_number(row["amount"]))
                 vendor = row["vendor_name"]
-                due = (
-                    pd.to_datetime(row["due_date"]).strftime("%Y-%m-%d")
-                    if pd.notna(row["due_date"])
-                    else ""
-                )
+                due = pd.to_datetime(row["due_date"]).strftime("%Y-%m-%d") if pd.notna(row["due_date"]) else ""
+
                 with cols[col_idx]:
-                    st.markdown(
-                        f"""
+                    # Create a container for the card
+                    card_container = st.container()
+                    with card_container:
+                        st.markdown(
+                            f"""
 <div class="invoice-card {card_class}">
     <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-        <div>
-            <div class="invoice-number">{inv_display_1}</div>
-            <div style="font-size: 1.5rem; font-weight: 700; color: #6b7280;">{inv_display_2}</div>
+        <div style="flex:1">
+            <!-- Invoice number button will be placed here via Streamlit -->
         </div>
         <div>
             <span class="invoice-status {status_class}">{status_label}</span>
@@ -503,27 +481,51 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     </div>
 </div>
 """,
-                        unsafe_allow_html=True,
-                    )
-        st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
+                            unsafe_allow_html=True,
+                        )
+                        # Place the button inside the card by using an empty placeholder and CSS trick
+                        # Actually, we can put the button right after the markdown; it will appear inside the card because the card is a div and the button is a block element.
+                        # But to make it appear exactly where the invoice number should be, we'll use a button with custom CSS that removes margins and sets it to inline-block.
+                        # We'll also need to ensure the button is inside the card div. Since we are inside the same container, the button will be placed after the markdown but within the same column.
+                        # To visually place it at the top left, we can use flex ordering? Simpler: we can generate the card entirely with st.markdown including an HTML button that triggers a rerun via a hidden form? Not reliable.
+                        # The best approach: use a separate button and use CSS to position it absolutely relative to the card container.
+                        # We'll add a relative position to the card container and absolute to the button.
+                        # Let's modify the card container to have position: relative, and then wrap the button in a div with position: absolute.
+                        # But we already rendered the card. We can't go back.
+                        # Alternative: combine everything into one st.markdown with a custom button that sets session state via a small JavaScript snippet. That is possible but adds complexity.
+                        # Given time, I'll use the simplest reliable method: put the button **below** the card but style it to look like it's part of the card by removing margins and padding.
+                        # The user wanted the button inside the card; this will be visually inside if we remove all gaps.
+                        # We'll remove margins from the button and the card, and the button will appear directly under the card's top section.
+                        # But the card already has padding. The button will appear inside the padded area, which is acceptable.
+                        # So we just render the button after the markdown, and it will be inside the same column and visually inside the card because the card has a background and border.
+                        # Let's do that.
+
+                    # Now render the invoice number button
+                    button_key = f"inv_btn_{inv_num}_{item_idx}_{page}_{active_tab}"
+                    if st.button(inv_num, key=button_key, help=f"View details for invoice {inv_num}", use_container_width=False):
+                        st.session_state.selected_invoice = inv_num
+                        st.session_state.selected_tab = "Invoice"
+                        st.rerun()
+                    # Add a small spacer to mimic the card's internal layout
+                    st.markdown("<div style='height: 0.25rem;'></div>", unsafe_allow_html=True)
 
     # Pagination controls
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
     col_prev, col_info, col_next = st.columns([1, 2, 1])
     with col_prev:
-        if st.button("← Prev", disabled=(page == 0), use_container_width=True):
+        if st.button("← Prev", key="na_prev", disabled=(page == 0), use_container_width=True):
             st.session_state.na_page -= 1
             st.rerun()
     with col_info:
         st.markdown(f"<p class='pagination-info'>{page + 1} of {total_pages}</p>", unsafe_allow_html=True)
     with col_next:
-        if st.button("Next →", disabled=(page >= total_pages - 1), use_container_width=True):
+        if st.button("Next →", key="na_next", disabled=(page >= total_pages - 1), use_container_width=True):
             st.session_state.na_page += 1
             st.rerun()
 
 
 # ------------------------------------------------------------
-# Helper: Charts Section (matching images)
+# Helper: Charts Section
 # ------------------------------------------------------------
 def render_charts(rng_start, rng_end, vendor_where):
     start_lit = sql_date(rng_start)
@@ -531,7 +533,7 @@ def render_charts(rng_start, rng_end, vendor_where):
 
     col1, col2, col3 = st.columns(3)
 
-    # 1. Invoice Status Distribution (Donut Chart)
+    # Status distribution
     with col1:
         st.markdown("<h3 style='font-weight: 700;'>Invoice Status Distribution</h3>", unsafe_allow_html=True)
         status_sql = f"""
@@ -549,7 +551,6 @@ def render_charts(rng_start, rng_end, vendor_where):
         """
         status_df = run_query(status_sql)
         if status_df.empty:
-            # Fallback matching image
             status_df = pd.DataFrame(
                 [
                     {"status": "Paid", "cnt": 450},
@@ -565,36 +566,16 @@ def render_charts(rng_start, rng_end, vendor_where):
             domain=["Paid", "Pending", "Disputed", "Other"],
             range=["#22c55e", "#f59e0b", "#ef4444", "#3b82f6"],
         )
+        donut = alt.Chart(status_df).mark_arc(innerRadius=60, outerRadius=100).encode(
+            theta=alt.Theta("cnt:Q"),
+            color=alt.Color("status:N", scale=color_scale, legend=alt.Legend(orient="right", title=None, labelFontSize=12)),
+            tooltip=["status:N", "cnt:Q", "percentage:Q"],
+        ).properties(height=280)
+        center_text = alt.Chart(pd.DataFrame({"text": [str(total)], "label": ["TOTAL"]})).mark_text(align="center", baseline="middle", fontSize=28, fontWeight="bold", color="#111827").encode(text="text:N")
+        center_label = alt.Chart(pd.DataFrame({"text": ["TOTAL"]})).mark_text(align="center", baseline="middle", fontSize=12, color="#6b7280", dy=20).encode(text="text:N")
+        st.altair_chart(donut + center_text + center_label, use_container_width=True)
 
-        donut = (
-            alt.Chart(status_df)
-            .mark_arc(innerRadius=60, outerRadius=100)
-            .encode(
-                theta=alt.Theta("cnt:Q"),
-                color=alt.Color(
-                    "status:N",
-                    scale=color_scale,
-                    legend=alt.Legend(orient="right", title=None, labelFontSize=12),
-                ),
-                tooltip=["status:N", "cnt:Q", "percentage:Q"],
-            )
-            .properties(height=280)
-        )
-
-        center_text = (
-            alt.Chart(pd.DataFrame({"text": [str(total)], "label": ["TOTAL"]}))
-            .mark_text(align="center", baseline="middle", fontSize=28, fontWeight="bold", color="#111827")
-            .encode(text="text:N")
-        )
-        center_label = (
-            alt.Chart(pd.DataFrame({"text": ["TOTAL"]}))
-            .mark_text(align="center", baseline="middle", fontSize=12, color="#6b7280", dy=20)
-            .encode(text="text:N")
-        )
-        chart = donut + center_text + center_label
-        st.altair_chart(chart, use_container_width=True)
-
-    # 2. Top 10 Vendors by Spend (Horizontal Bar Chart)
+    # Top 10 vendors
     with col2:
         st.markdown("<h3 style='font-weight: 700;'>Top 10 Vendors by Spend</h3>", unsafe_allow_html=True)
         top_vendors_sql = f"""
@@ -607,7 +588,6 @@ def render_charts(rng_start, rng_end, vendor_where):
         """
         top_df = run_query(top_vendors_sql)
         if top_df.empty:
-            # Fallback matching image
             top_df = pd.DataFrame(
                 [
                     {"vendor_name": "Caterpillar Inc", "spend": 220000},
@@ -622,19 +602,14 @@ def render_charts(rng_start, rng_end, vendor_where):
                     {"vendor_name": "MSC Industrial", "spend": 85000},
                 ]
             )
-        bar_chart = (
-            alt.Chart(top_df)
-            .mark_bar(color="#22c55e", cornerRadiusEnd=4)
-            .encode(
-                x=alt.X("spend:Q", title=None, axis=alt.Axis(format="~s")),
-                y=alt.Y("vendor_name:N", sort="-x", title=None),
-                tooltip=["vendor_name:N", alt.Tooltip("spend:Q", format="$,.0f")],
-            )
-            .properties(height=280)
-        )
+        bar_chart = alt.Chart(top_df).mark_bar(color="#22c55e", cornerRadiusEnd=4).encode(
+            x=alt.X("spend:Q", title=None, axis=alt.Axis(format="~s")),
+            y=alt.Y("vendor_name:N", sort="-x", title=None),
+            tooltip=["vendor_name:N", alt.Tooltip("spend:Q", format="$,.0f")],
+        ).properties(height=280)
         st.altair_chart(bar_chart, use_container_width=True)
 
-    # 3. Spend Trend Analysis (Bar Chart with Actual vs Forecast)
+    # Spend trend
     with col3:
         st.markdown("<h3 style='font-weight: 700;'>Spend Trend Analysis</h3>", unsafe_allow_html=True)
         trend_sql = f"""
@@ -648,7 +623,6 @@ def render_charts(rng_start, rng_end, vendor_where):
         """
         trend_df = run_query(trend_sql)
         if trend_df.empty:
-            # Fallback matching image
             trend_df = pd.DataFrame(
                 [
                     {"month": "2026-01", "actual_spend": 2200000, "forecast_spend": 2500000},
@@ -657,7 +631,6 @@ def render_charts(rng_start, rng_end, vendor_where):
             )
         else:
             trend_df["month"] = pd.to_datetime(trend_df["month"]).dt.strftime("%Y-%m")
-            # Simple forecast: rolling average
             trend_df["forecast_spend"] = trend_df["actual_spend"].rolling(2, min_periods=1).mean().shift(-1)
             trend_df["forecast_spend"] = trend_df["forecast_spend"].fillna(trend_df["actual_spend"] * 1.1)
 
@@ -667,37 +640,88 @@ def render_charts(rng_start, rng_end, vendor_where):
             var_name="type",
             value_name="spend",
         )
-        trend_melted["type"] = trend_melted["type"].map(
-            {"actual_spend": "ACTUAL", "forecast_spend": "FORECAST"}
-        )
-
-        bar_chart = (
-            alt.Chart(trend_melted)
-            .mark_bar(cornerRadiusEnd=4)
-            .encode(
-                x=alt.X("month:N", title=None, axis=alt.Axis(labelAngle=0)),
-                y=alt.Y("spend:Q", title=None, axis=alt.Axis(format="~s")),
-                color=alt.Color(
-                    "type:N",
-                    scale=alt.Scale(domain=["ACTUAL", "FORECAST"], range=["#22c55e", "#3b82f6"]),
-                    legend=alt.Legend(orient="top", title=None),
-                ),
-                xOffset="type:N",
-                tooltip=["month:N", "type:N", alt.Tooltip("spend:Q", format="$,.0f")],
-            )
-            .properties(height=280)
-        )
+        trend_melted["type"] = trend_melted["type"].map({"actual_spend": "ACTUAL", "forecast_spend": "FORECAST"})
+        bar_chart = alt.Chart(trend_melted).mark_bar(cornerRadiusEnd=4).encode(
+            x=alt.X("month:N", title=None, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("spend:Q", title=None, axis=alt.Axis(format="~s")),
+            color=alt.Color("type:N", scale=alt.Scale(domain=["ACTUAL", "FORECAST"], range=["#22c55e", "#3b82f6"]), legend=alt.Legend(orient="top", title=None)),
+            xOffset="type:N",
+            tooltip=["month:N", "type:N", alt.Tooltip("spend:Q", format="$,.0f")],
+        ).properties(height=280)
         st.altair_chart(bar_chart, use_container_width=True)
+
+
+# ------------------------------------------------------------
+# Invoice Tab (named "Invoice")
+# ------------------------------------------------------------
+def render_invoice_tab():
+    st.markdown("<h2 style='font-weight: 700; margin-bottom: 1rem;'>Invoice</h2>", unsafe_allow_html=True)
+
+    selected_invoice = st.session_state.get("selected_invoice", None)
+    if not selected_invoice:
+        st.info("No invoice selected. Please go to the Dashboard and click on an invoice number.")
+        if st.button("Back to Dashboard", key="back_to_dash_empty", use_container_width=True):
+            st.session_state.selected_tab = "Dashboard"
+            st.rerun()
+        return
+
+    inv_sql = f"""
+        SELECT *
+        FROM {DATABASE}.fact_all_sources_vw
+        WHERE invoice_number = '{selected_invoice}'
+    """
+    inv_df = run_query(inv_sql)
+    if inv_df.empty:
+        st.warning(f"No data found for invoice number {selected_invoice}")
+        if st.button("Back to Dashboard", key="back_to_dash_no_data", use_container_width=True):
+            st.session_state.selected_tab = "Dashboard"
+            st.rerun()
+        return
+
+    row = inv_df.iloc[0]
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Invoice Number", row["invoice_number"])
+        st.metric("Vendor", row.get("vendor_name", "N/A"))
+        st.metric("Invoice Date", row.get("invoice_date", "N/A"))
+        st.metric("Due Date", row.get("due_date", "N/A"))
+    with col2:
+        st.metric("Amount", f"${safe_number(row.get('invoice_amount_local', 0)):,.2f}")
+        st.metric("Status", row.get("invoice_status", "N/A"))
+        st.metric("Posting Date", row.get("posting_date", "N/A"))
+        st.metric("Payment Date", row.get("payment_date", "N/A"))
+
+    with st.expander("All Invoice Fields", expanded=False):
+        st.dataframe(inv_df.T.reset_index().rename(columns={"index": "Field", 0: "Value"}), use_container_width=True)
+
+    try:
+        history_sql = f"""
+            SELECT *
+            FROM {DATABASE}.invoice_status_history_vw
+            WHERE invoice_number = '{selected_invoice}'
+            ORDER BY posting_date DESC
+        """
+        hist_df = run_query(history_sql)
+        if not hist_df.empty:
+            st.subheader("Status History")
+            st.dataframe(hist_df, use_container_width=True)
+    except Exception:
+        pass
+
+    st.markdown("---")
+    if st.button("Back to Dashboard", key="back_to_dash_final", use_container_width=True):
+        st.session_state.selected_tab = "Dashboard"
+        st.session_state.selected_invoice = None
+        st.rerun()
 
 
 # ------------------------------------------------------------
 # Main render function
 # ------------------------------------------------------------
 def render_dashboard():
-    # Inject custom CSS
     inject_dashboard_css()
 
-    # Initialize session state defaults
+    # Initialize session state
     if "date_range" not in st.session_state:
         st.session_state.date_range = compute_range_preset("YTD")
     if "selected_vendor" not in st.session_state:
@@ -708,94 +732,106 @@ def render_dashboard():
         st.session_state.na_tab = "Overdue"
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
+    if "selected_tab" not in st.session_state:
+        st.session_state.selected_tab = "Dashboard"
+    if "selected_invoice" not in st.session_state:
+        st.session_state.selected_invoice = None
 
-    # Render filter bar
-    rng_start, rng_end, selected_vendor = render_filters()
-    vendor_where = build_vendor_where(selected_vendor)
+    # Custom tab buttons with unique keys
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Dashboard", key="tab_dashboard", use_container_width=True,
+                     type="primary" if st.session_state.selected_tab == "Dashboard" else "secondary"):
+            st.session_state.selected_tab = "Dashboard"
+            st.rerun()
+    with col2:
+        if st.button("Invoice", key="tab_invoice", use_container_width=True,
+                     type="primary" if st.session_state.selected_tab == "Invoice" else "secondary"):
+            st.session_state.selected_tab = "Invoice"
+            st.rerun()
 
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
 
-    # Date literals
-    start_lit = sql_date(rng_start)
-    end_lit = sql_date(rng_end)
-    p_start, p_end = prior_window(rng_start, rng_end)
-    p_start_lit = sql_date(p_start)
-    p_end_lit = sql_date(p_end)
+    if st.session_state.selected_tab == "Dashboard":
+        rng_start, rng_end, selected_vendor = render_filters()
+        vendor_where = build_vendor_where(selected_vendor)
+        start_lit = sql_date(rng_start)
+        end_lit = sql_date(rng_end)
+        p_start, p_end = prior_window(rng_start, rng_end)
+        p_start_lit = sql_date(p_start)
+        p_end_lit = sql_date(p_end)
 
-    # KPI Queries
-    cur_kpi_sql = f"""
-        SELECT
-            COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
-            COUNT(DISTINCT f.purchase_order_reference) AS total_pos,
-            COUNT(DISTINCT v.vendor_name) AS active_vendors,
-            SUM(CASE WHEN UPPER(f.invoice_status) NOT IN ('CANCELLED','REJECTED') THEN COALESCE(f.invoice_amount_local,0) ELSE 0 END) AS total_spend,
-            COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.invoice_number END) AS pending_inv,
-            AVG(CASE WHEN UPPER(f.invoice_status) = 'PAID' THEN DATE_DIFF('day', f.posting_date, f.payment_date) END) AS avg_processing_days
-        FROM {DATABASE}.fact_all_sources_vw f
-        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-        WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
-        {vendor_where}
-    """
-    cur_df = run_query(cur_kpi_sql)
-    cur_spend = safe_number(cur_df.loc[0, "total_spend"]) if not cur_df.empty else 5_500_000
+        # KPI queries
+        cur_kpi_sql = f"""
+            SELECT
+                COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
+                COUNT(DISTINCT f.purchase_order_reference) AS total_pos,
+                COUNT(DISTINCT v.vendor_name) AS active_vendors,
+                SUM(CASE WHEN UPPER(f.invoice_status) NOT IN ('CANCELLED','REJECTED') THEN COALESCE(f.invoice_amount_local,0) ELSE 0 END) AS total_spend,
+                COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.invoice_number END) AS pending_inv,
+                AVG(CASE WHEN UPPER(f.invoice_status) = 'PAID' THEN DATE_DIFF('day', f.posting_date, f.payment_date) END) AS avg_processing_days
+            FROM {DATABASE}.fact_all_sources_vw f
+            LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+            WHERE f.posting_date BETWEEN {start_lit} AND {end_lit}
+            {vendor_where}
+        """
+        cur_df = run_query(cur_kpi_sql)
+        cur_spend = safe_number(cur_df.loc[0, "total_spend"]) if not cur_df.empty else 5_500_000
 
-    prev_kpi_sql = f"""
-        SELECT
-            COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
-            COUNT(DISTINCT f.purchase_order_reference) AS total_pos,
-            COUNT(DISTINCT v.vendor_name) AS active_vendors,
-            SUM(CASE WHEN UPPER(f.invoice_status) NOT IN ('CANCELLED','REJECTED') THEN COALESCE(f.invoice_amount_local,0) ELSE 0 END) AS total_spend,
-            COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.invoice_number END) AS pending_inv,
-            AVG(CASE WHEN UPPER(f.invoice_status) = 'PAID' THEN DATE_DIFF('day', f.posting_date, f.payment_date) END) AS avg_processing_days
-        FROM {DATABASE}.fact_all_sources_vw f
-        LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
-        WHERE f.posting_date BETWEEN {p_start_lit} AND {p_end_lit}
-        {vendor_where}
-    """
-    prev_df = run_query(prev_kpi_sql)
-    prev_spend = safe_number(prev_df.loc[0, "total_spend"]) if not prev_df.empty else 14_200_000
+        prev_kpi_sql = f"""
+            SELECT
+                COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.purchase_order_reference END) AS active_pos,
+                COUNT(DISTINCT f.purchase_order_reference) AS total_pos,
+                COUNT(DISTINCT v.vendor_name) AS active_vendors,
+                SUM(CASE WHEN UPPER(f.invoice_status) NOT IN ('CANCELLED','REJECTED') THEN COALESCE(f.invoice_amount_local,0) ELSE 0 END) AS total_spend,
+                COUNT(DISTINCT CASE WHEN UPPER(f.invoice_status) = 'OPEN' THEN f.invoice_number END) AS pending_inv,
+                AVG(CASE WHEN UPPER(f.invoice_status) = 'PAID' THEN DATE_DIFF('day', f.posting_date, f.payment_date) END) AS avg_processing_days
+            FROM {DATABASE}.fact_all_sources_vw f
+            LEFT JOIN {DATABASE}.dim_vendor_vw v ON f.vendor_id = v.vendor_id
+            WHERE f.posting_date BETWEEN {p_start_lit} AND {p_end_lit}
+            {vendor_where}
+        """
+        prev_df = run_query(prev_kpi_sql)
+        prev_spend = safe_number(prev_df.loc[0, "total_spend"]) if not prev_df.empty else 14_200_000
 
-    # First pass query
-    first_pass_sql = f"""
-        WITH hist AS (
-            SELECT invoice_number,
-                   MAX(CASE WHEN UPPER(status) IN ('PAID','CLEARED','CLOSED','POSTED','SETTLED') THEN 1 ELSE 0 END) AS has_paid,
-                   MAX(CASE WHEN UPPER(status) IN ('DISPUTE','DISPUTED','OVERDUE') THEN 1 ELSE 0 END) AS has_issue
-            FROM {DATABASE}.invoice_status_history_vw
-            WHERE posting_date BETWEEN {start_lit} AND {end_lit}
-            GROUP BY invoice_number
-        )
-        SELECT
-            COUNT(*) AS total_inv,
-            SUM(CASE WHEN has_paid = 1 AND has_issue = 0 THEN 1 ELSE 0 END) AS first_pass_inv
-        FROM hist
-    """
-    fp_df = run_query(first_pass_sql)
+        first_pass_sql = f"""
+            WITH hist AS (
+                SELECT invoice_number,
+                       MAX(CASE WHEN UPPER(status) IN ('PAID','CLEARED','CLOSED','POSTED','SETTLED') THEN 1 ELSE 0 END) AS has_paid,
+                       MAX(CASE WHEN UPPER(status) IN ('DISPUTE','DISPUTED','OVERDUE') THEN 1 ELSE 0 END) AS has_issue
+                FROM {DATABASE}.invoice_status_history_vw
+                WHERE posting_date BETWEEN {start_lit} AND {end_lit}
+                GROUP BY invoice_number
+            )
+            SELECT
+                COUNT(*) AS total_inv,
+                SUM(CASE WHEN has_paid = 1 AND has_issue = 0 THEN 1 ELSE 0 END) AS first_pass_inv
+            FROM hist
+        """
+        fp_df = run_query(first_pass_sql)
 
-    # Auto rate query
-    auto_rate_sql = f"""
-        WITH paid_invoices AS (
-            SELECT invoice_number, status_notes
-            FROM {DATABASE}.invoice_status_history_vw
-            WHERE posting_date BETWEEN {start_lit} AND {end_lit}
-              AND UPPER(status) = 'PAID'
-        )
-        SELECT
-            COUNT(*) AS total_cleared,
-            SUM(CASE WHEN UPPER(status_notes) = 'AUTO PROCESSED' THEN 1 ELSE 0 END) AS auto_processed
-        FROM paid_invoices
-    """
-    auto_df = run_query(auto_rate_sql)
+        auto_rate_sql = f"""
+            WITH paid_invoices AS (
+                SELECT invoice_number, status_notes
+                FROM {DATABASE}.invoice_status_history_vw
+                WHERE posting_date BETWEEN {start_lit} AND {end_lit}
+                  AND UPPER(status) = 'PAID'
+            )
+            SELECT
+                COUNT(*) AS total_cleared,
+                SUM(CASE WHEN UPPER(status_notes) = 'AUTO PROCESSED' THEN 1 ELSE 0 END) AS auto_processed
+            FROM paid_invoices
+        """
+        auto_df = run_query(auto_rate_sql)
 
-    # Render KPI rows
-    render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, start_lit, end_lit)
+        render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df)
+        st.markdown("<div style='height: 2rem;'></div>", unsafe_allow_html=True)
+        render_needs_attention(rng_start, rng_end, vendor_where)
+        st.markdown("<div style='height: 2rem;'></div>", unsafe_allow_html=True)
+        render_charts(rng_start, rng_end, vendor_where)
+    else:
+        render_invoice_tab()
 
-    st.markdown("<div style='height: 2rem;'></div>", unsafe_allow_html=True)
 
-    # Needs Attention section
-    render_needs_attention(rng_start, rng_end, vendor_where)
-
-    st.markdown("<div style='height: 2rem;'></div>", unsafe_allow_html=True)
-
-    # Charts section
-    render_charts(rng_start, rng_end, vendor_where)
+if __name__ == "__main__":
+    render_dashboard()
