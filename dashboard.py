@@ -81,34 +81,31 @@ def inject_dashboard_css():
         font-size: 1.2rem;
         margin-left: 0.25rem;
     }
-    /* Needs Attention Section */
-    .attention-header {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: #111827;
-        margin-bottom: 1rem;
+    /* Circle Button Styling */
+    .circle-invoice-btn button {
+        background: #d1d5db !important;
+        border-radius: 50% !important;
+        width: 70px !important;
+        height: 70px !important;
+        padding: 0 !important;
+        border: none !important;
+        font-weight: 700 !important;
+        font-size: 0.75rem !important;
+        color: #111827 !important;
+        white-space: pre-line !important;
+        line-height: 1.3 !important;
+        cursor: pointer !important;
     }
-    .tab-button {
-        border-radius: 25px;
-        padding: 0.5rem 1.5rem;
-        font-weight: 500;
-        border: 1px solid #e5e7eb;
-        background: #f9fafb;
-        color: #374151;
-        cursor: pointer;
-        transition: all 0.2s;
+    .circle-invoice-btn button:hover {
+        background: #9ca3af !important;
+        transform: scale(1.05);
     }
-    .tab-button-active {
-        background: #3b82f6;
-        color: white;
-        border-color: #3b82f6;
+    .circle-invoice-btn-selected button {
+        background: #3b82f6 !important;
+        color: white !important;
     }
-    /* Charts Section */
-    .chart-title {
-        font-size: 1.25rem;
-        font-weight: 700;
-        color: #111827;
-        margin-bottom: 1rem;
+    .circle-invoice-btn-selected button:hover {
+        background: #2563eb !important;
     }
     /* Pagination */
     .pagination-info {
@@ -453,14 +450,14 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     if attention_df.empty:
         attention_df = pd.DataFrame(
             [
-                {"invoice_number": 9000, "amount": 2600, "vendor_name": "Honeywell Intl", "due_date": "2026-03-04"},
-                {"invoice_number": 9001, "amount": 4200, "vendor_name": "Sonepar USA", "due_date": "2026-03-04"},
-                {"invoice_number": 9002, "amount": 14400, "vendor_name": "Motion Industries", "due_date": "2026-03-08"},
-                {"invoice_number": 9003, "amount": 741, "vendor_name": "Sonepar USA", "due_date": "2026-03-08"},
-                {"invoice_number": 9004, "amount": 5800, "vendor_name": "Eaton Corp", "due_date": "2026-03-10"},
-                {"invoice_number": 9005, "amount": 12300, "vendor_name": "MSC Industrial", "due_date": "2026-03-12"},
-                {"invoice_number": 9006, "amount": 3400, "vendor_name": "Emerson Electric", "due_date": "2026-03-15"},
-                {"invoice_number": 9007, "amount": 8900, "vendor_name": "ABB Ltd", "due_date": "2026-03-18"},
+                {"invoice_number": 9001767, "amount": 3300, "vendor_name": "McMaster-Carr", "due_date": "2026-02-01"},
+                {"invoice_number": 9004648, "amount": 2600, "vendor_name": "MSC Industrial", "due_date": "2026-02-12"},
+                {"invoice_number": 9006459, "amount": 1900, "vendor_name": "Eaton Corp", "due_date": "2026-02-12"},
+                {"invoice_number": 9005389, "amount": 13800, "vendor_name": "Motion Industries", "due_date": "2026-02-12"},
+                {"invoice_number": 9005677, "amount": 19900, "vendor_name": "Honeywell Intl", "due_date": "2026-02-19"},
+                {"invoice_number": 9004607, "amount": 2200, "vendor_name": "McMaster-Carr", "due_date": "2026-02-19"},
+                {"invoice_number": 9007488, "amount": 15400, "vendor_name": "MSC Industrial", "due_date": "2026-02-19"},
+                {"invoice_number": 9006418, "amount": 1600, "vendor_name": "Emerson Electric", "due_date": "2026-02-19"},
             ]
         )
         attention_df["due_date"] = pd.to_datetime(attention_df["due_date"])
@@ -482,66 +479,36 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         vendor = row["vendor_name"] if pd.notna(row["vendor_name"]) else "Unknown Vendor"
         due = pd.to_datetime(row["due_date"]).strftime("%Y-%m-%d") if pd.notna(row["due_date"]) else ""
 
+        # Determine circle button class (selected or not)
+        circle_class = "circle-invoice-btn-selected" if st.session_state.selected_invoice == inv_num else "circle-invoice-btn"
+
         with cols[idx % 4]:
-            # Use st.container to create a proper wrapper
-            card_container = st.container()
-            with card_container:
-                # Apply card styling using a unique key-based approach
+            # Open card div with background and border
+            st.markdown(
+                f"""
+<div style="background: {card_bg}; border: 1px solid {card_border}; border-radius: 16px; padding: 1rem; min-height: 160px;">
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Two-column layout inside card
+            left_col, right_col = st.columns([1, 1.2])
+            with left_col:
+                # Wrap button in div with circle class
+                st.markdown(f'<div class="{circle_class}">', unsafe_allow_html=True)
+                button_label = f"{inv_top}\n{inv_bottom}" if inv_bottom else inv_top
+                if st.button(
+                    button_label,
+                    key=f"inv_btn_{page}_{idx}_{inv_num}",
+                    help=f"Click to view invoice {inv_num}",
+                ):
+                    navigate_to_invoice(inv_num)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            with right_col:
+                # Status badge and amount
                 st.markdown(
                     f"""
-<style>
-    div[data-testid="stVerticalBlock"]:has(> div[data-testid="stButton"] > button[key="inv_btn_{page}_{idx}_{inv_num}"]) {{
-        background: {card_bg};
-        border: 1px solid {card_border};
-        border-radius: 16px;
-        padding: 1rem;
-        min-height: 160px;
-    }}
-</style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-                # Row 1: Circle button + Status/Amount
-                row1_left, row1_right = st.columns([1, 1.2])
-                with row1_left:
-                    # Circle button for invoice number
-                    button_label = f"{inv_top}\n{inv_bottom}" if inv_bottom else inv_top
-                    st.markdown(
-                        f"""
-<style>
-    div[data-testid="stButton"]:has(button[kind="secondary"]) button {{
-        background: #e5e7eb !important;
-        border-radius: 50% !important;
-        width: 70px !important;
-        height: 70px !important;
-        padding: 0 !important;
-        border: none !important;
-        font-weight: 700 !important;
-        font-size: 0.75rem !important;
-        color: #111827 !important;
-        white-space: pre-line !important;
-        line-height: 1.3 !important;
-    }}
-    div[data-testid="stButton"]:has(button[kind="secondary"]) button:hover {{
-        background: #d1d5db !important;
-        transform: scale(1.05);
-    }}
-</style>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                    if st.button(
-                        button_label,
-                        key=f"inv_btn_{page}_{idx}_{inv_num}",
-                        help=f"Click to view invoice {inv_num}",
-                    ):
-                        navigate_to_invoice(inv_num)
-
-                with row1_right:
-                    # Status badge and amount
-                    st.markdown(
-                        f"""
 <div style="text-align: right; padding-top: 0.5rem;">
     <span style="
         display: inline-block;
@@ -559,20 +526,23 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         margin-top: 0.5rem;
     ">{amt}</div>
 </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-                # Row 2: Due date and vendor
-                st.markdown(
-                    f"""
+            # Due date and vendor row
+            st.markdown(
+                f"""
 <div style="margin-top: 0.75rem; padding-top: 0.5rem; border-top: 1px solid rgba(0,0,0,0.05);">
     <div style="font-size: 0.8rem; color: #6b7280;">Due: {due}</div>
     <div style="font-size: 0.85rem; color: #374151; font-weight: 500; margin-top: 0.25rem;">{vendor}</div>
 </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Close card div
+            st.markdown('</div>', unsafe_allow_html=True)
 
     # Pagination controls
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
