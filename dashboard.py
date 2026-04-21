@@ -698,7 +698,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                         if st.button(
                             "⠀",  # Invisible character
                             key=f"inv_click_{card_key}",
-                            help=f"Click to view invoice {inv_num}",
+                            help=f"{inv_num}",  # Changed: now shows only the invoice number
                             use_container_width=True,
                         ):
                             navigate_to_invoice(inv_num)
