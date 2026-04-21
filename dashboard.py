@@ -109,11 +109,7 @@ def inject_dashboard_css():
         border-radius: 16px;
         padding: 1rem;
         border: 1px solid #e5e7eb;
-        display: flex;
-        flex-direction: column;
-        gap: 0.5rem;
-        min-height: 160px;
-        position: relative;
+        min-height: 150px;
     }
     .invoice-card-overdue {
         background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
@@ -422,7 +418,7 @@ def navigate_to_invoice(invoice_number):
 
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section with Clickable Circle Buttons
+# Helper: Needs Attention Section with Clickable Circle Buttons (everything inside card)
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     if "na_tab" not in st.session_state:
@@ -594,7 +590,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     end_idx = start_idx + items_per_page
     page_df = attention_df.iloc[start_idx:end_idx]
 
-    # Render cards in 4-column grid (2 rows of 4)
+    # Render cards in 4-column grid
     for row_start in range(0, len(page_df), 4):
         cols = st.columns(4)
         for col_idx in range(4):
@@ -624,8 +620,8 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                     st.markdown(
                         f"""
 <div class="invoice-card {card_class}">
-<div style="display: flex; justify-content: space-between; align-items: flex-start;">
-<div class="{circle_class}">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+        <div class="{circle_class}">
 """,
                         unsafe_allow_html=True,
                     )
@@ -634,22 +630,22 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                     if st.button(
                         button_label,
                         key=f"inv_btn_{page}_{item_idx}_{inv_num}",
-                        help=f"{inv_num}",  # Tooltip shows invoice number
+                        help=f"{inv_num}",
                         use_container_width=False,
                     ):
                         navigate_to_invoice(inv_num)
                     st.markdown(
                         f"""
-</div>
-<div style="text-align: right;">
-<span class="invoice-status {status_class}">{status_label}</span>
-<div class="invoice-amount" style="margin-top: 0.5rem;">{amt}</div>
-</div>
-</div>
-<div style="margin-top: 0.75rem;">
-<div class="invoice-due-date">Due: {due}</div>
-<div class="invoice-vendor">{vendor}</div>
-</div>
+        </div>
+        <div style="text-align: right;">
+            <span class="invoice-status {status_class}">{status_label}</span>
+            <div class="invoice-amount" style="margin-top: 0.5rem;">{amt}</div>
+        </div>
+    </div>
+    <div style="margin-top: 0.75rem;">
+        <div class="invoice-due-date">Due: {due}</div>
+        <div class="invoice-vendor">{vendor}</div>
+    </div>
 </div>
 """,
                         unsafe_allow_html=True,
