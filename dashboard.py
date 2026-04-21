@@ -871,14 +871,14 @@ def render_dashboard():
     if "selected_invoice" not in st.session_state:
         st.session_state.selected_invoice = None
 
-    # Check for invoice query parameter (from clickable cards)
-    query_params = st.query_params
+    # Check for invoice query parameter (from clickable cards) - using experimental API for older Streamlit
+    query_params = st.experimental_get_query_params()
     if "invoice" in query_params:
-        invoice_num = query_params["invoice"]
+        invoice_num = query_params["invoice"][0]  # returns a list
         st.session_state.search_invoice_number = format_invoice_number(invoice_num)
         st.session_state.active_tab = "Invoices"
         # Clear query param to avoid repeated navigation
-        st.query_params.clear()
+        st.experimental_set_query_params()
         st.rerun()
 
     # Render filter bar
