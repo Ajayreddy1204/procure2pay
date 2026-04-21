@@ -14,7 +14,7 @@ from quick_analysis import run_quick_analysis
 from config import DATABASE
 
 # ------------------------------------------------------------
-# Cash Flow Forecast handler (unchanged)
+# Cash Flow Forecast handler
 # ------------------------------------------------------------
 def process_cash_flow_forecast(question: str) -> dict:
     cf_sql = f"""
@@ -487,7 +487,7 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
     }
 
 # ------------------------------------------------------------
-# Generic custom query processor
+# Custom query processor with desired output format
 # ------------------------------------------------------------
 def process_custom_query(query: str) -> dict:
     sql, _ = generate_sql(query)
@@ -497,9 +497,35 @@ def process_custom_query(query: str) -> dict:
     df = run_query(sql)
     if df.empty:
         return {"layout": "error", "message": "Query returned no data."}
+    
+    # Create a formatted response exactly as requested
+    # First, get interpretation from AI
     data_preview = df.head(10).to_string(index=False, max_colwidth=40)
-    prompt = DESCRIPTIVE_PROMPT_TEMPLATE.format(question=query, sql=sql, data_preview=data_preview)
+    
+    # Custom prompt to match the exact format
+    prompt = f"""
+You are a senior procurement analyst. The user asked: "{query}".
+
+Based on the SQL result below, write a response with exactly the following structure:
+
+**Descriptive — What the data shows**
+First, write "This is our interpretation of your question:" followed by a clear restatement of what the user asked, then describe the key findings from the data. Use exact numbers from the data.
+
+**Prescriptive — Recommendations & next steps**
+Write "Based on the provided data, here are the prescriptive insights, specific recommended actions, and risks:" then provide bullet points under subheadings like "Total Spend YTD Insights:", "Recommended Actions:", "Risks:". Each bullet should include specific findings, actions, and where relevant, potential losses or savings in dollar amounts. End with a concluding sentence.
+
+Data (first 10 rows):
+{data_preview}
+
+SQL used:
+{sql}
+
+Respond in plain text using markdown for headings and bullet points. Do not include any extra commentary outside the two sections.
+"""
     analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst. Provide concise, data-driven insights.")
+    if not analyst_text:
+        analyst_text = f"Unable to generate insights. Raw data:\n{data_preview}"
+    
     return {
         "layout": "analyst",
         "sql": sql,
@@ -803,7 +829,7 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
             st.code(result["sql"], language="sql")
 
 # ------------------------------------------------------------
-# Main Genie render function – fully working chat input
+# Main Genie render function – working chatbox with desired format
 # ------------------------------------------------------------
 def render_genie():
     # CSS for rectangle cards + chat styling
@@ -957,13 +983,15 @@ def render_genie():
             st.session_state.genie_response = result
             st.session_state.genie_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
             if result.get("layout") not in ("error",):
-                st.session_state.genie_messages.append({"role": "assistant", "content": "Analysis complete.", "response": result, "timestamp": datetime.now()})
+                # Format the assistant message with the desired structure
+                assistant_content = f"AI Assistant\n\nYour question: {auto_query}\n\n{result.get('analyst_response', 'No analysis available.')}"
+                st.session_state.genie_messages.append({"role": "assistant", "content": assistant_content, "response": result, "timestamp": datetime.now()})
                 save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", auto_query)
                 st.session_state.genie_turn_index += 1
                 sql_used_val = result.get("sql", "")
                 if isinstance(sql_used_val, dict):
                     sql_used_val = json.dumps(sql_used_val)
-                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", sql_used=sql_used_val)
+                save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", assistant_content, sql_used=sql_used_val)
                 st.session_state.genie_turn_index += 1
                 save_question(auto_query, "forecast")
                 set_cache(auto_query, result)
@@ -1083,15 +1111,14 @@ def render_genie():
                     elif layout == "quick":
                         render_quick_analysis_response(resp)
                     elif layout == "analyst":
-                        if resp.get("analyst_response"):
-                            st.markdown(resp["analyst_response"])
-                        else:
-                            st.info("No descriptive analysis available.")
+                        # Show data table and chart if available
                         df = pd.DataFrame(resp["df"])
-                        st.dataframe(df, use_container_width=True)
-                        chart = auto_chart(df)
-                        if chart:
-                            st.altair_chart(chart, use_container_width=True)
+                        if not df.empty:
+                            st.subheader("Supporting Data")
+                            st.dataframe(df, use_container_width=True)
+                            chart = auto_chart(df)
+                            if chart:
+                                st.altair_chart(chart, use_container_width=True)
                         with st.expander("View SQL used"):
                             st.code(resp["sql"], language="sql")
                     elif layout == "sql":
@@ -1108,7 +1135,6 @@ def render_genie():
 
         # ----- WORKING INPUT FORM (below chat history) -----
         with st.form(key="genie_form", clear_on_submit=True):
-            # Use columns to place text input and submit button side by side
             col_input, col_btn = st.columns([0.85, 0.15])
             with col_input:
                 prefill_value = st.session_state.pop("genie_prefill", "")
@@ -1127,13 +1153,14 @@ def render_genie():
                     if cached:
                         st.session_state.genie_response = cached
                         st.session_state.genie_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
-                        st.session_state.genie_messages.append({"role": "assistant", "content": "Answer from cache.", "response": cached, "timestamp": datetime.now()})
+                        assistant_content = f"AI Assistant\n\nYour question: {user_question}\n\n{cached.get('analyst_response', 'No analysis available.')}"
+                        st.session_state.genie_messages.append({"role": "assistant", "content": assistant_content, "response": cached, "timestamp": datetime.now()})
                         save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
                         st.session_state.genie_turn_index += 1
                         sql_used_val = cached.get("sql", "") if isinstance(cached, dict) else ""
                         if isinstance(sql_used_val, dict):
                             sql_used_val = json.dumps(sql_used_val)
-                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Answer from cache.", source="cache", sql_used=sql_used_val)
+                        save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", assistant_content, source="cache", sql_used=sql_used_val)
                         st.session_state.genie_turn_index += 1
                         save_question(user_question, "custom")
                     else:
@@ -1162,13 +1189,14 @@ def render_genie():
                             set_cache(user_question, result)
                             st.session_state.genie_response = result
                             st.session_state.genie_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
-                            st.session_state.genie_messages.append({"role": "assistant", "content": "Analysis complete.", "response": result, "timestamp": datetime.now()})
+                            assistant_content = f"AI Assistant\n\nYour question: {user_question}\n\n{result.get('analyst_response', 'No analysis available.')}"
+                            st.session_state.genie_messages.append({"role": "assistant", "content": assistant_content, "response": result, "timestamp": datetime.now()})
                             save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "user", user_question)
                             st.session_state.genie_turn_index += 1
                             sql_used_val = result.get("sql", "")
                             if isinstance(sql_used_val, dict):
                                 sql_used_val = json.dumps(sql_used_val)
-                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", "Analysis complete.", sql_used=sql_used_val)
+                            save_chat_message(st.session_state.genie_session_id, st.session_state.genie_turn_index, "assistant", assistant_content, sql_used=sql_used_val)
                             st.session_state.genie_turn_index += 1
                             save_question(user_question, "forecast")
                         else:
