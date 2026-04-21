@@ -173,54 +173,17 @@ def inject_dashboard_css():
         color: #6b7280;
         font-size: 0.9rem;
     }
-    /* Clickable Invoice Circle Button */
-    .invoice-circle-btn {
-        background: #d1d5db;
-        border-radius: 50%;
-        width: 70px;
-        height: 70px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        cursor: pointer;
-        border: none;
-        transition: all 0.2s ease;
+    /* Clickable Card Link - makes whole card clickable */
+    .clickable-card-link {
         text-decoration: none;
+        color: inherit;
+        display: block;
+        cursor: pointer;
     }
-    .invoice-circle-btn:hover {
-        background: #9ca3af;
-        transform: scale(1.05);
-    }
-    .invoice-circle-btn-selected {
-        background: #3b82f6;
-    }
-    .invoice-circle-btn-selected:hover {
-        background: #2563eb;
-    }
-    .invoice-circle-btn-selected .inv-top,
-    .invoice-circle-btn-selected .inv-bottom {
-        color: white;
-    }
-    .inv-top {
-        font-size: 1rem;
-        font-weight: 700;
-        color: #111827;
-        line-height: 1.2;
-    }
-    .inv-bottom {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: #6b7280;
-        line-height: 1.2;
-    }
-    /* Hide default streamlit button styling for circle buttons */
-    .stButton > button[data-testid="baseButton-secondary"].circle-btn {
-        background: transparent !important;
-        border: none !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        box-shadow: none !important;
+    .clickable-card-link:hover {
+        opacity: 0.95;
+        transform: scale(1.01);
+        transition: all 0.2s ease;
     }
 </style>
 """,
@@ -235,12 +198,9 @@ def format_invoice_number(invoice_num):
     """Convert invoice number to integer string, removing any decimal points."""
     if invoice_num is None:
         return ""
-    # Convert to string first
     inv_str = str(invoice_num)
-    # Remove .0 if present (handles float conversion)
     if inv_str.endswith('.0'):
         inv_str = inv_str[:-2]
-    # Try to convert to int and back to string to remove any decimals
     try:
         inv_str = str(int(float(inv_str)))
     except (ValueError, TypeError):
@@ -434,20 +394,17 @@ def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, star
 
 
 # ------------------------------------------------------------
-# Helper: Navigate to Invoice Tab
+# Helper: Navigate to Invoices Tab (plural)
 # ------------------------------------------------------------
 def navigate_to_invoice(invoice_number):
-    """Set session state to navigate to invoice tab with specific invoice."""
-    # Store the invoice number to search for
+    """Set session state to navigate to the Invoices tab with a specific invoice."""
     st.session_state.search_invoice_number = format_invoice_number(invoice_number)
-    # Set the active tab to "Invoices"
-    st.session_state.active_tab = "Invoices"
-    # Trigger rerun to navigate
+    st.session_state.active_tab = "Invoices"   # plural, matches the tab name
     st.rerun()
 
 
 # ------------------------------------------------------------
-# Helper: Needs Attention Section with Clickable Invoice Circles
+# Helper: Needs Attention Section with Clickable Cards
 # ------------------------------------------------------------
 def render_needs_attention(rng_start, rng_end, vendor_where):
     if "na_tab" not in st.session_state:
@@ -525,10 +482,12 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         condition = "f.due_date < CURRENT_DATE AND UPPER(f.invoice_status) = 'OVERDUE'"
         status_label = "Overdue"
         status_class = "status-overdue"
+        card_class = "invoice-card-overdue"
     elif active_tab == "Disputed":
         condition = "UPPER(f.invoice_status) IN ('DISPUTE','DISPUTED')"
         status_label = "Disputed"
         status_class = "status-disputed"
+        card_class = "invoice-card-disputed"
     else:
         condition = (
             "f.due_date >= CURRENT_DATE "
@@ -537,6 +496,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         )
         status_label = "Due"
         status_class = "status-due"
+        card_class = "invoice-card-due"
 
     attention_sql = f"""
         SELECT f.invoice_number,
@@ -640,40 +600,30 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                 # Determine if this invoice is selected
                 is_selected = st.session_state.selected_invoice == inv_num
 
-                # Determine background color based on status
-                if status_label == "Overdue":
-                    bg_style = "background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border: 1px solid #fecaca;"
-                elif status_label == "Disputed":
-                    bg_style = "background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border: 1px solid #fde68a;"
-                else:
-                    bg_style = "background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border: 1px solid #bfdbfe;"
-
                 # Circle button styling - blue if selected, gray otherwise
                 circle_bg = "#3b82f6" if is_selected else "#d1d5db"
                 text_color_top = "white" if is_selected else "#111827"
                 text_color_bottom = "white" if is_selected else "#6b7280"
 
                 with cols[col_idx]:
-                    # Create unique key for this card
-                    card_key = f"card_{page}_{item_idx}_{inv_num}"
-
-                    # Render the card with clickable circle using a form to handle the click
+                    # Make the whole card clickable using an <a> tag that sets a query parameter
+                    # The main app will read ?invoice=... and set active_tab = "Invoices"
+                    click_url = f"?invoice={inv_num}"
                     st.markdown(
                         f"""
-<div style="{bg_style} border-radius: 16px; padding: 1rem; min-height: 150px;">
+<a href="{click_url}" class="clickable-card-link" title="{inv_num}">
+<div class="invoice-card {card_class}" style="background: {'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border: 1px solid #fecaca' if status_label == 'Overdue' else 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border: 1px solid #fde68a' if status_label == 'Disputed' else 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border: 1px solid #bfdbfe'};">
 <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-<div id="circle_{card_key}" style="
-                                    background: {circle_bg};
-                                    border-radius: 50%;
-                                    width: 70px;
-                                    height: 70px;
-                                    display: flex;
-                                    flex-direction: column;
-                                    justify-content: center;
-                                    align-items: center;
-                                    cursor: pointer;
-                                    transition: all 0.2s ease;
-                                ">
+<div style="
+    background: {circle_bg};
+    border-radius: 50%;
+    width: 70px;
+    height: 70px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+">
 <div style="font-size: 1rem; font-weight: 700; color: {text_color_top}; line-height: 1.2;">{inv_top}</div>
 <div style="font-size: 1.2rem; font-weight: 700; color: {text_color_bottom}; line-height: 1.2;">{inv_bottom}</div>
 </div>
@@ -687,22 +637,10 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
 <div class="invoice-vendor">{vendor}</div>
 </div>
 </div>
+</a>
 """,
                         unsafe_allow_html=True,
                     )
-
-                    # Invisible button overlaid on the card area for click handling
-                    # Using columns to position the button over the circle area
-                    btn_col1, btn_col2 = st.columns([1, 2])
-                    with btn_col1:
-                        if st.button(
-                            "⠀",  # Invisible character
-                            key=f"inv_click_{card_key}",
-                            help=f"{inv_num}",  # Changed: now shows only the invoice number
-                            use_container_width=True,
-                        ):
-                            navigate_to_invoice(inv_num)
-
         st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
 
     # Pagination controls
@@ -932,6 +870,16 @@ def render_dashboard():
         st.session_state.na_page = 0
     if "selected_invoice" not in st.session_state:
         st.session_state.selected_invoice = None
+
+    # Check for invoice query parameter (from clickable cards)
+    query_params = st.query_params
+    if "invoice" in query_params:
+        invoice_num = query_params["invoice"]
+        st.session_state.search_invoice_number = format_invoice_number(invoice_num)
+        st.session_state.active_tab = "Invoices"
+        # Clear query param to avoid repeated navigation
+        st.query_params.clear()
+        st.rerun()
 
     # Render filter bar
     rng_start, rng_end, selected_vendor = render_filters()
