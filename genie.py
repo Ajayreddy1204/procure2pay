@@ -1051,39 +1051,16 @@ Respond in plain text, using markdown for headings and bullet points. Do not inc
 
 
 # ------------------------------------------------------------
-# Main Genie render function – Unified layout (always show sidebar + cards + chat)
+# Main Genie render function – Final layout: cards on top, lists and chat side by side below
 # ------------------------------------------------------------
 def render_genie():
-    # Inject custom CSS for consistent styling
+    # Inject custom CSS
     st.markdown("""
 <style>
-    /* Main container */
-    .main-container {
-        max-width: 1400px;
-        margin: 0 auto;
-    }
-    /* Welcome header */
-    .welcome-header {
-        text-align: center;
-        padding: 1rem 0 0.5rem 0;
-    }
-    .welcome-header h1 {
-        font-size: 1.8rem;
-        font-weight: 600;
-        color: #1e293b;
-        margin-bottom: 0.25rem;
-    }
-    .welcome-header p {
-        color: #64748b;
-        font-size: 0.9rem;
-    }
-    /* Quick analysis cards grid */
-    .cards-grid {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 1rem;
-        margin: 1rem 0 1.5rem 0;
-    }
+    .main-container { max-width: 1400px; margin: 0 auto; }
+    .welcome-header { text-align: center; padding: 0.5rem 0 0.5rem 0; }
+    .welcome-header h1 { font-size: 1.8rem; font-weight: 600; color: #1e293b; margin-bottom: 0.25rem; }
+    .welcome-header p { color: #64748b; font-size: 0.9rem; }
     .quick-card {
         background: white;
         border-radius: 16px;
@@ -1093,120 +1070,48 @@ def render_genie():
         text-align: center;
         transition: all 0.2s ease;
     }
-    .quick-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 20px rgba(0,0,0,0.08);
-    }
+    .quick-card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.08); }
     .card-icon {
-        width: 48px;
-        height: 48px;
-        background: #3b82f6;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin: 0 auto 0.8rem auto;
-        font-size: 1.3rem;
+        width: 48px; height: 48px; background: #3b82f6; border-radius: 12px;
+        display: flex; align-items: center; justify-content: center;
+        margin: 0 auto 0.8rem auto; font-size: 1.3rem;
     }
-    .quick-card h3 {
-        font-size: 1rem;
-        font-weight: 600;
-        color: #1e293b;
-        margin: 0 0 0.4rem 0;
+    .quick-card h3 { font-size: 1rem; font-weight: 600; color: #1e293b; margin: 0 0 0.4rem 0; }
+    .quick-card p { font-size: 0.8rem; color: #64748b; line-height: 1.4; margin: 0 0 0.8rem 0; }
+    .info-heading {
+        font-size: 0.85rem; font-weight: 600; color: #475569;
+        text-transform: uppercase; letter-spacing: 0.5px; margin: 0.75rem 0 0.5rem 0;
     }
-    .quick-card p {
-        font-size: 0.8rem;
-        color: #64748b;
-        line-height: 1.4;
-        margin: 0 0 0.8rem 0;
-    }
-    /* Sidebar styling */
-    .sidebar-section {
-        padding-right: 1rem;
-    }
-    .sidebar-heading {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: #475569;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin: 0.75rem 0 0.5rem 0;
-    }
-    .sidebar-item {
-        padding: 0.4rem 0;
-        cursor: pointer;
-        font-size: 0.85rem;
-        color: #334155;
-        border-bottom: 1px solid #f1f5f9;
-    }
-    .sidebar-item:hover {
-        color: #3b82f6;
-    }
-    /* Chat area */
+    .info-item { padding: 0.4rem 0; cursor: pointer; font-size: 0.85rem; color: #334155; border-bottom: 1px solid #f1f5f9; }
+    .info-item:hover { color: #3b82f6; }
     .chat-messages {
-        max-height: 400px;
-        overflow-y: auto;
-        padding: 0.5rem;
-        margin-bottom: 1rem;
-        background: #fafcff;
-        border-radius: 16px;
+        max-height: 400px; overflow-y: auto; padding: 0.5rem; margin-bottom: 1rem;
+        background: #fafcff; border-radius: 16px;
     }
     .message-user {
         background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-        color: white;
-        padding: 10px 16px;
-        border-radius: 18px 18px 4px 18px;
-        margin: 8px 0;
-        max-width: 80%;
-        margin-left: auto;
-        text-align: right;
+        color: white; padding: 10px 16px; border-radius: 18px 18px 4px 18px;
+        margin: 8px 0; max-width: 80%; margin-left: auto; text-align: right;
     }
     .message-assistant {
-        background: #f1f5f9;
-        color: #1e293b;
-        padding: 10px 16px;
-        border-radius: 18px 18px 18px 4px;
-        margin: 8px 0;
-        max-width: 85%;
+        background: #f1f5f9; color: #1e293b; padding: 10px 16px;
+        border-radius: 18px 18px 18px 4px; margin: 8px 0; max-width: 85%;
     }
     .start-conversation {
-        text-align: center;
-        padding: 2rem 1rem;
-        background: #f8fafc;
-        border-radius: 20px;
-        margin: 1rem 0;
+        text-align: center; padding: 2rem 1rem; background: #f8fafc;
+        border-radius: 20px; margin: 1rem 0;
     }
     .plus-button {
-        width: 56px;
-        height: 56px;
-        background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin: 0 auto 1rem auto;
-        cursor: pointer;
-        box-shadow: 0 4px 12px rgba(59,130,246,0.3);
+        width: 56px; height: 56px; background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+        border-radius: 50%; display: flex; align-items: center; justify-content: center;
+        margin: 0 auto 1rem auto; cursor: pointer; box-shadow: 0 4px 12px rgba(59,130,246,0.3);
     }
-    .plus-button span {
-        font-size: 1.8rem;
-        color: white;
-        font-weight: 300;
-    }
-    .chat-input-container {
-        margin-top: 1rem;
-    }
-    div[data-testid="stExpander"] {
-        border: none;
-        box-shadow: none;
-    }
-    hr {
-        margin: 0.5rem 0;
-    }
+    .plus-button span { font-size: 1.8rem; color: white; font-weight: 300; }
+    hr { margin: 0.5rem 0; }
 </style>
     """, unsafe_allow_html=True)
 
-    # Session state initialization
+    # Session state
     if "genie_session_id" not in st.session_state:
         st.session_state.genie_session_id = str(uuid.uuid4())
     if "current_messages" not in st.session_state:
@@ -1221,7 +1126,7 @@ def render_genie():
         "Invoice Aging": "invoice_aging"
     }
 
-    # Process auto-run from card buttons (triggered via rerun)
+    # Process auto-run from card buttons
     auto_query = st.session_state.pop("auto_run_query", None)
     if auto_query:
         with st.spinner("Running analysis..."):
@@ -1260,10 +1165,35 @@ def render_genie():
                 st.session_state.current_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
             st.rerun()
 
-    # ----- LAYOUT: Two columns -----
-    left_col, right_col = st.columns([0.28, 0.72], gap="large")
+    # ----- TOP: Four quick analysis cards -----
+    st.markdown('<div class="welcome-header"><h1>Welcome to ProcureIQ Genie</h1><p>Let Genie run one of these quick analyses for you</p></div>', unsafe_allow_html=True)
+    cards_data = [
+        {"icon": "📊", "title": "Spending Overview", "description": "Track total spend, monthly trends and major changes"},
+        {"icon": "🏭", "title": "Vendor Analysis", "description": "Understand vendor-wise spend, concentration, and dependency"},
+        {"icon": "⏱️", "title": "Payment Performance", "description": "Identify delays, late payments, and cycle time issues"},
+        {"icon": "📅", "title": "Invoice Aging", "description": "See overdue invoices, risk buckets, and problem areas"}
+    ]
+    cols = st.columns(4, gap="small")
+    for idx, (col, card) in enumerate(zip(cols, cards_data)):
+        with col:
+            st.markdown(f"""
+<div class="quick-card">
+<div class="card-icon">{card['icon']}</div>
+<h3>{card['title']}</h3>
+<p>{card['description']}</p>
+</div>
+            """, unsafe_allow_html=True)
+            if st.button("Ask Genie", key=f"card_{idx}", use_container_width=True):
+                st.session_state.auto_run_query = card['title']
+                st.rerun()
 
-    with left_col:
+    st.markdown("---")
+
+    # ----- BOTTOM: Two columns (info lists on left, chat on right) -----
+    left_info, right_chat = st.columns([0.35, 0.65], gap="large")
+
+    with left_info:
+        # Saved insights
         st.markdown("##### 📌 Saved insights")
         insights = get_saved_insights_cached(page="genie")
         if insights:
@@ -1275,6 +1205,7 @@ def render_genie():
             st.caption("No saved insights yet")
         st.markdown("---")
 
+        # Frequently asked by you
         st.markdown("##### 🔥 Frequently asked by you")
         faqs = get_frequent_questions_by_user_cached(5)
         if faqs:
@@ -1290,6 +1221,7 @@ def render_genie():
                     st.rerun()
         st.markdown("---")
 
+        # Most frequent (all)
         st.markdown("##### 🌍 Most frequent (all)")
         all_faqs = get_frequent_questions_all_cached(5)
         if all_faqs:
@@ -1298,39 +1230,12 @@ def render_genie():
         else:
             st.caption("No questions yet")
 
-    with right_col:
-        # Header
+    with right_chat:
         st.markdown('<div style="text-align: right; margin-bottom: 0.5rem;"><span style="font-size: 1rem; font-weight: 600; color: #1e293b;">AI Assistant</span></div>', unsafe_allow_html=True)
 
-        # Quick analysis cards (always visible)
-        st.markdown('<div class="welcome-header"><h1>Welcome to ProcureIQ Genie</h1><p>Let Genie run one of these quick analyses for you</p></div>', unsafe_allow_html=True)
-        cards_data = [
-            {"icon": "📊", "title": "Spending Overview", "description": "Track total spend, monthly trends and major changes"},
-            {"icon": "🏭", "title": "Vendor Analysis", "description": "Understand vendor-wise spend, concentration, and dependency"},
-            {"icon": "⏱️", "title": "Payment Performance", "description": "Identify delays, late payments, and cycle time issues"},
-            {"icon": "📅", "title": "Invoice Aging", "description": "See overdue invoices, risk buckets, and problem areas"}
-        ]
-        cols = st.columns(4, gap="small")
-        for idx, (col, card) in enumerate(zip(cols, cards_data)):
-            with col:
-                st.markdown(f"""
-<div class="quick-card">
-<div class="card-icon">{card['icon']}</div>
-<h3>{card['title']}</h3>
-<p>{card['description']}</p>
-</div>
-                """, unsafe_allow_html=True)
-                if st.button("Ask Genie", key=f"card_{idx}", use_container_width=True):
-                    st.session_state.auto_run_query = card['title']
-                    st.rerun()
-
-        st.markdown("---")
-
-        # Chat area: conversation or start placeholder
         chat_container = st.container()
         with chat_container:
             if not st.session_state.current_messages:
-                # Start conversation placeholder
                 st.markdown("""
 <div class="start-conversation">
 <div class="plus-button"><span>+</span></div>
@@ -1339,7 +1244,6 @@ def render_genie():
 </div>
                 """, unsafe_allow_html=True)
             else:
-                # Display chat history
                 st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
                 for msg in st.session_state.current_messages:
                     if msg["role"] == "user":
@@ -1349,7 +1253,6 @@ def render_genie():
                         if "response" in msg and msg["response"]:
                             resp = msg["response"]
                             layout = resp.get("layout")
-                            # Render appropriate response based on layout
                             if layout == "cash_flow":
                                 render_cash_flow_response(resp)
                             elif layout == "early_payment":
@@ -1386,7 +1289,7 @@ def render_genie():
                             st.markdown(msg["content"])
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # Chat input (always at bottom)
+        # Chat input
         with st.form(key="genie_chat_form", clear_on_submit=True):
             col_in, col_btn = st.columns([0.85, 0.15])
             with col_in:
