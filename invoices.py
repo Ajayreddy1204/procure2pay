@@ -262,8 +262,12 @@ def render_invoices():
     st.subheader("📑 Invoices")
     st.markdown("Search, track and manage all invoices in one place")
 
-    # Check if an invoice was selected from Dashboard
-    selected_invoice = st.session_state.get("selected_invoice", None)
+    # --------------------------------------------------------
+    # NEW: Read invoice number from query parameters (set by dashboard)
+    # --------------------------------------------------------
+    query_params = st.query_params
+    selected_invoice = query_params.get("invoice")
+
     if selected_invoice:
         inv_sql = f"""
             SELECT
@@ -293,16 +297,17 @@ def render_invoices():
         inv_df = run_query(inv_sql)
         if not inv_df.empty:
             render_invoice_detail(inv_df.iloc[0].to_dict(), selected_invoice)
+            # Back button: clear the invoice query parameter
             if st.button("← Back to Invoices List", use_container_width=True):
-                st.session_state.selected_invoice = None
+                st.query_params.update({"invoice": None})
                 st.rerun()
             return
         else:
             st.warning(f"Invoice {selected_invoice} not found. Clearing selection.")
-            st.session_state.selected_invoice = None
+            st.query_params.update({"invoice": None})
             st.rerun()
 
-    # ---- Invoice List View (unchanged, keep existing) ----
+    # ---- Invoice List View (unchanged) ----
     if "invoice_search_term" not in st.session_state:
         st.session_state.invoice_search_term = ""
 
