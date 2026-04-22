@@ -432,17 +432,12 @@ def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, star
 
 
 # ------------------------------------------------------------
-# Helper: Navigate to Invoice Tab
+# Helper: Navigate to Invoice Tab using Query Parameters
 # ------------------------------------------------------------
 def navigate_to_invoice(invoice_number):
-    """Set session state to navigate to invoice tab with specific invoice."""
-    # Store the invoice number for the Invoices page to display detail
-    st.session_state.selected_invoice = format_invoice_number(invoice_number)
-    # Optionally clear any lingering search term to avoid confusion
-    st.session_state.inv_search_q = ""
-    # Set the active tab to "Invoices"
-    st.session_state.active_tab = "Invoices"
-    # Trigger rerun to navigate
+    """Set query parameters to navigate to Invoices tab with a specific invoice."""
+    inv_str = format_invoice_number(invoice_number)
+    st.query_params.update({"tab": "Invoices", "invoice": inv_str})
     st.rerun()
 
 
@@ -454,8 +449,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         st.session_state.na_tab = "Overdue"
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
-    if "selected_invoice" not in st.session_state:
-        st.session_state.selected_invoice = None
 
     active_tab = st.session_state.na_tab
     page = st.session_state.na_page
@@ -493,7 +486,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         ):
             st.session_state.na_tab = "Overdue"
             st.session_state.na_page = 0
-            st.session_state.selected_invoice = None
             st.rerun()
     with tab_cols[1]:
         if st.button(
@@ -504,7 +496,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         ):
             st.session_state.na_tab = "Disputed"
             st.session_state.na_page = 0
-            st.session_state.selected_invoice = None
             st.rerun()
     with tab_cols[2]:
         if st.button(
@@ -515,7 +506,6 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
         ):
             st.session_state.na_tab = "Due"
             st.session_state.na_page = 0
-            st.session_state.selected_invoice = None
             st.rerun()
 
     st.markdown("<div style='height: 1rem;'></div>", unsafe_allow_html=True)
@@ -637,8 +627,9 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                     else ""
                 )
 
-                # Determine if this invoice is selected
-                is_selected = st.session_state.selected_invoice == inv_num
+                # Determine if this invoice is selected (from query param)
+                selected_invoice = st.query_params.get("invoice")
+                is_selected = selected_invoice == inv_num
 
                 # Determine background color based on status
                 if status_label == "Overdue":
@@ -697,7 +688,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                         if st.button(
                             "⠀",  # Invisible character
                             key=f"inv_click_{card_key}",
-                            help=f"{inv_num}",   # Tooltip shows only invoice number
+                            help=f"{inv_num}",
                             use_container_width=True,
                         ):
                             navigate_to_invoice(inv_num)
@@ -929,8 +920,6 @@ def render_dashboard():
         st.session_state.na_tab = "Overdue"
     if "na_page" not in st.session_state:
         st.session_state.na_page = 0
-    if "selected_invoice" not in st.session_state:
-        st.session_state.selected_invoice = None
 
     # Render filter bar
     rng_start, rng_end, selected_vendor = render_filters()
