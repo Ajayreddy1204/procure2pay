@@ -432,12 +432,12 @@ def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, star
 
 
 # ------------------------------------------------------------
-# Helper: Navigate to Invoice Tab using Query Parameters
+# Helper: Navigate to Invoice Tab using experimental query params
 # ------------------------------------------------------------
 def navigate_to_invoice(invoice_number):
     """Set query parameters to navigate to Invoices tab with a specific invoice."""
     inv_str = format_invoice_number(invoice_number)
-    st.query_params.update({"tab": "Invoices", "invoice": inv_str})
+    st.experimental_set_query_params(tab="Invoices", invoice=inv_str)
     st.rerun()
 
 
@@ -606,6 +606,10 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     end_idx = start_idx + items_per_page
     page_df = attention_df.iloc[start_idx:end_idx]
 
+    # Get selected invoice from URL (experimental)
+    query_params = st.experimental_get_query_params()
+    selected_invoice = query_params.get("invoice", [None])[0]
+
     # Render cards in 4-column grid (2 rows of 4)
     for row_start in range(0, len(page_df), 4):
         cols = st.columns(4)
@@ -627,8 +631,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                     else ""
                 )
 
-                # Determine if this invoice is selected (from query param)
-                selected_invoice = st.query_params.get("invoice")
+                # Determine if this invoice is selected
                 is_selected = selected_invoice == inv_num
 
                 # Determine background color based on status
