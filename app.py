@@ -61,23 +61,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# Sync query parameters with session state (experimental API)
+# Initialize session state for page navigation
 # ------------------------------------------------------------
-query_params = st.experimental_get_query_params()
-
-# If 'tab' is in URL, set the current page
-if "tab" in query_params:
-    tab_value = query_params["tab"][0]  # returns list
-    if tab_value == "Dashboard":
-        st.session_state.page = "Dashboard"
-    elif tab_value == "Genie":
-        st.session_state.page = "Genie"
-    elif tab_value == "Forecast":
-        st.session_state.page = "Forecast"
-    elif tab_value == "Invoices":
-        st.session_state.page = "Invoices"
-
-# Default page if not set
 if "page" not in st.session_state:
     st.session_state.page = "Dashboard"
 
@@ -95,22 +80,9 @@ with col_nav:
     nav_cols = st.columns(4)
     current_page = st.session_state.page
 
-    # Helper to update both session state and URL (experimental)
+    # Helper to change page
     def set_page(page_name):
         st.session_state.page = page_name
-        # Map page name to tab value
-        tab_map = {
-            "Dashboard": "Dashboard",
-            "Genie": "Genie",
-            "Forecast": "Forecast",
-            "Invoices": "Invoices"
-        }
-        # Preserve invoice param if on Invoices, else remove
-        current_params = st.experimental_get_query_params()
-        new_params = {"tab": tab_map[page_name]}
-        if page_name == "Invoices" and "invoice" in current_params:
-            new_params["invoice"] = current_params["invoice"]
-        st.experimental_set_query_params(**new_params)
         st.rerun()
 
     with nav_cols[0]:
@@ -139,7 +111,9 @@ with col_logo:
 
 st.markdown("---")
 
+# ------------------------------------------------------------
 # Render the selected page
+# ------------------------------------------------------------
 if st.session_state.page == "Dashboard":
     render_dashboard()
 elif st.session_state.page == "Genie":
