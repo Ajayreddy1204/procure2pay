@@ -1152,6 +1152,9 @@ def render_genie():
             else:
                 result = process_custom_query(auto_query)
 
+            # ***** MODIFICATION: Clear previous messages for card clicks *****
+            st.session_state.current_messages = []  # <-- remove old conversation
+
             st.session_state.current_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
             if result.get("layout") != "error":
                 assistant_content = result.get('analyst_response', 'Analysis complete.')
@@ -1307,7 +1310,7 @@ def render_genie():
 
 
 def process_user_question(user_question: str, quick_map: dict):
-    """Process user question and update chat"""
+    """Process user question and update chat (append to existing conversation)."""
     with st.spinner("Generating insights..."):
         cached = get_cache(user_question)
         if cached:
