@@ -295,7 +295,7 @@ Respond in plain text using markdown for headings and bullet points. Do not incl
 
 
 # ------------------------------------------------------------
-# Specialised handlers
+# Specialised handlers (full implementations – same as previous)
 # ------------------------------------------------------------
 def process_cash_flow_forecast(question: str) -> dict:
     cf_sql = f"""
@@ -960,100 +960,110 @@ def render_grir_vendor_followup(result: dict):
 
 
 def render_quick_analysis_response(result: dict):
-    # Generate AI response if missing
-    if "analyst_response" not in result or not result["analyst_response"]:
-        analysis_type = result.get("type", "spending_overview")
-        metrics = result.get("metrics", {})
-        monthly_df = result.get("monthly_df")
-        vendors_df = result.get("vendors_df")
-        monthly_preview = ""
-        if monthly_df is not None:
-            monthly_preview = monthly_df.head(6).to_string(index=False)
-        vendors_preview = ""
-        if vendors_df is not None:
-            vendors_preview = vendors_df.head(10).to_string(index=False)
-        metrics_str = json.dumps({k: (float(v) if isinstance(v, (int, float)) else str(v)) for k, v in metrics.items()}, indent=2)
-
-        analysis_prompts = {
-            "spending_overview": "Focus on total spend, month‑over‑month changes, vendor concentration, and any anomalies. Provide actions to optimise spend.",
-            "vendor_analysis": "Focus on vendor concentration (top vendors' share), over‑reliance risks, invoice frequency, and vendor performance. Suggest diversification and contingency plans.",
-            "payment_performance": "Focus on average days to pay, late payment trends, and their impact on supplier relationships and cash flow. Suggest process improvements.",
-            "invoice_aging": "Focus on overdue amounts, aging buckets, and potential cash flow risks. Suggest collection strategies and early payment discounts."
-        }
-
-        prompt = f"""
-You are a senior procurement analyst. Based on the following data from a {analysis_type.replace('_', ' ')} analysis, write a response with two sections:
-
-1. **Descriptive** – What the data shows. Cite exact numbers, identify trends, and highlight anomalies. Keep it concise (3‑5 sentences).
-
-2. **Prescriptive** – Specific recommended actions and risks based on the data. List 3‑5 bullet points. Each bullet must include a specific finding, a concrete action, and a brief 'Why it matters'.
-
-Data metrics:
-{metrics_str}
-
-Monthly trend (first 6 rows):
-{monthly_preview}
-
-Top vendors / aging data (first 10 rows):
-{vendors_preview}
-
-Analysis focus: {analysis_prompts.get(analysis_type, "Provide actionable procurement insights.")}
-
-Respond in plain text, using markdown for headings and bullet points. Do not include any extra commentary.
-"""
-        analyst_text = ask_bedrock(prompt, system_prompt="You are a helpful procurement analyst.")
-        result["analyst_response"] = analyst_text
-        set_cache(result.get("question", analysis_type), result)
-
-    # Display metrics and charts
     metrics = result.get("metrics", {})
-    if metrics:
-        st.markdown("### 📊 Key Metrics")
-        cols = st.columns(len(metrics))
-        colors = ["#fef3c7", "#dbeafe", "#dcfce7", "#fce7f3", "#e0e7ff"]
-        for i, (key, value) in enumerate(metrics.items()):
-            with cols[i]:
-                label = key.replace("_", " ").title()
-                if isinstance(value, (int, float)):
-                    if "pct" in key:
-                        display = f"{value:+.1f}%"
-                    elif "spend" in key or "amount" in key:
-                        display = abbr_currency(value)
-                    else:
-                        display = f"{value:,}"
-                else:
-                    display = str(value)
-                st.markdown(f"""
-<div style="background-color: {colors[i % len(colors)]}; border-radius: 12px; padding: 12px; text-align: center;">
-<div style="font-size: 0.85rem; color: #4b5563;">{label}</div>
-<div style="font-size: 1.5rem; font-weight: 700; color: #1f2937;">{display}</div>
-</div>
-                """, unsafe_allow_html=True)
-
+    monthly_df = result.get("monthly_df")
+    vendors_df = result.get("vendors_df")
     anomaly = result.get("anomaly")
+    prescriptive = result.get("analyst_response")
+    sql_queries = result.get("sql", {})
+
+    def get_metric(key, default=0):
+        val = metrics.get(key, default)
+        if isinstance(val, (int, float)):
+            return val
+        return default
+
+    st.markdown(f"**Your question**\n{result.get('question', 'Spending Overview')}")
+    st.markdown("---")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        total_spend = get_metric("total_ytd", get_metric("total_spend", 0))
+        st.metric("Total Spend (YTD)", abbr_currency(total_spend))
+    with col2:
+        mom = get_metric("mom_pct", 0)
+        st.metric("MoM Change", f"{mom:+.1f}%")
+    with col3:
+        top5_pct = get_metric("top5_pct", 0)
+        st.metric("Top 5 Vendors", f"{top5_pct:.1f}% of total spend")
+    with col4:
+        qoq = get_metric("qoq_pct", 0)
+        st.metric("QoQ Change", f"{qoq:+.1f}%")
+
     if anomaly:
         st.warning(f"⚠️ **Anomaly Detected**\n\n{anomaly}")
 
-    monthly_df = result.get("monthly_df")
     if monthly_df is not None and not monthly_df.empty:
-        st.subheader("Monthly Trend")
-        st.dataframe(monthly_df, use_container_width=True)
+        st.subheader("Spending Trends")
+        monthly_df = monthly_df.copy()
+        if "month" in monthly_df.columns:
+            monthly_df["month_dt"] = pd.to_datetime(monthly_df["month"])
+            monthly_df = monthly_df.sort_values("month_dt")
+            monthly_df["month_str"] = monthly_df["month_dt"].dt.strftime("%b %Y")
 
-    vendors_df = result.get("vendors_df")
+        if "monthly_spend" in monthly_df.columns:
+            spend_chart = alt.Chart(monthly_df).mark_bar(color="#22c55e", cornerRadiusEnd=4).encode(
+                x=alt.X("month_str:N", title=None, sort=None),
+                y=alt.Y("monthly_spend:Q", title=None, axis=alt.Axis(format="~s")),
+                tooltip=["month_str:N", alt.Tooltip("monthly_spend:Q", format="$,.0f")]
+            ).properties(height=250, title="Monthly Spend Trend (Last 12 Months)")
+            st.altair_chart(spend_chart, use_container_width=True)
+
+        if "invoice_count" in monthly_df.columns:
+            invoice_chart = alt.Chart(monthly_df).mark_bar(color="#3b82f6", cornerRadiusEnd=4).encode(
+                x=alt.X("month_str:N", title=None, sort=None),
+                y=alt.Y("invoice_count:Q", title=None),
+                tooltip=["month_str:N", "invoice_count:Q"]
+            ).properties(height=250, title="Invoice volume by month")
+            st.altair_chart(invoice_chart, use_container_width=True)
+
+        if "vendor_count" in monthly_df.columns:
+            vendor_chart = alt.Chart(monthly_df).mark_bar(color="#f59e0b", cornerRadiusEnd=4).encode(
+                x=alt.X("month_str:N", title=None, sort=None),
+                y=alt.Y("vendor_count:Q", title=None),
+                tooltip=["month_str:N", "vendor_count:Q"]
+            ).properties(height=250, title="Active vendors by month")
+            st.altair_chart(vendor_chart, use_container_width=True)
+
     if vendors_df is not None and not vendors_df.empty:
-        st.subheader("Top Vendors")
-        st.dataframe(vendors_df.head(10), use_container_width=True)
+        st.subheader("Top 10 Vendors by Spend (YTD)")
+        top_vendors = vendors_df.head(10).copy()
+        if "spend" in top_vendors.columns and "vendor_name" in top_vendors.columns:
+            bar_chart = alt.Chart(top_vendors).mark_bar(color="#22c55e", cornerRadiusEnd=4).encode(
+                x=alt.X("spend:Q", title=None, axis=alt.Axis(format="~s")),
+                y=alt.Y("vendor_name:N", sort="-x", title=None),
+                tooltip=["vendor_name:N", alt.Tooltip("spend:Q", format="$,.0f")]
+            ).properties(height=400)
+            st.altair_chart(bar_chart, use_container_width=True)
 
-    if result.get("analyst_response"):
-        st.markdown("### 💡 Key Insights")
-        st.markdown(result["analyst_response"])
+    if prescriptive:
+        st.markdown("### Prescriptive — Recommendations & next steps")
+        st.markdown(prescriptive)
+
+    with st.expander("Query outputs"):
+        if monthly_df is not None and not monthly_df.empty:
+            st.subheader("Monthly trend")
+            st.dataframe(monthly_df, use_container_width=True, hide_index=True)
+        if vendors_df is not None and not vendors_df.empty:
+            st.subheader("Top / bucket breakdown")
+            st.dataframe(vendors_df, use_container_width=True, hide_index=True)
+
+    with st.expander("Show SQL used"):
+        if isinstance(sql_queries, dict):
+            if "monthly_trend" in sql_queries:
+                st.code(sql_queries["monthly_trend"], language="sql")
+            if "top_vendors" in sql_queries:
+                st.code(sql_queries["top_vendors"], language="sql")
+        elif isinstance(sql_queries, str):
+            st.code(sql_queries, language="sql")
+        else:
+            st.caption("No SQL available.")
 
 
 # ------------------------------------------------------------
-# Main Genie render function
+# Main Genie render function – final UI
 # ------------------------------------------------------------
 def render_genie():
-    # Custom CSS for the exact layout
     st.markdown("""
 <style>
     .main-container { max-width: 1400px; margin: 0 auto; }
@@ -1156,7 +1166,6 @@ def render_genie():
             else:
                 result = process_custom_query(auto_query)
 
-            # Clear previous messages
             st.session_state.current_messages = []
             st.session_state.current_messages.append({"role": "user", "content": auto_query, "timestamp": datetime.now()})
             if result.get("layout") != "error":
@@ -1171,7 +1180,7 @@ def render_genie():
                 st.session_state.current_messages.append({"role": "assistant", "content": result.get("message", "Error"), "timestamp": datetime.now()})
             st.rerun()
 
-    # ----- TOP: Welcome header + four quick analysis cards -----
+    # ----- TOP: four quick analysis cards -----
     st.markdown('<div class="welcome-header"><h1>Welcome to ProcureIQ Genie</h1><p>Let Genie run one of these quick analyses for you</p></div>', unsafe_allow_html=True)
     cards_data = [
         {"icon": "📊", "title": "Spending Overview", "description": "Track total spend, monthly trends and major changes"},
@@ -1195,12 +1204,12 @@ def render_genie():
 
     st.markdown("---")
 
-    # ----- BOTTOM: Two columns (left info, right chat) -----
+    # ----- BOTTOM: Two columns -----
     left_info, right_chat = st.columns([0.35, 0.65], gap="large")
 
     with left_info:
-        # Saved insights
-        st.markdown("##### 📌 Saved insights")
+        # Saved insights (no emoji)
+        st.markdown("##### Saved insights")
         insights = get_saved_insights_cached(page="genie")
         if insights:
             for ins in insights[:5]:
@@ -1211,8 +1220,8 @@ def render_genie():
             st.caption("No saved insights yet")
         st.markdown("---")
 
-        # Frequently asked by you
-        st.markdown("##### 🔥 Frequently asked by you")
+        # Frequently asked by you (no emoji)
+        st.markdown("##### Frequently asked by you")
         faqs = get_frequent_questions_by_user_cached(5)
         if faqs:
             for faq in faqs[:5]:
@@ -1227,8 +1236,8 @@ def render_genie():
                     st.rerun()
         st.markdown("---")
 
-        # Most frequent (all)
-        st.markdown("##### 🌍 Most frequent (all)")
+        # Most frequent (all) (no emoji)
+        st.markdown("##### Most frequent (all)")
         all_faqs = get_frequent_questions_all_cached(5)
         if all_faqs:
             for faq in all_faqs[:5]:
@@ -1239,7 +1248,6 @@ def render_genie():
     with right_chat:
         st.markdown('<div style="text-align: right; margin-bottom: 0.5rem;"><span style="font-size: 1rem; font-weight: 600; color: #1e293b;">AI Assistant</span></div>', unsafe_allow_html=True)
 
-        # Chat messages container
         if not st.session_state.current_messages:
             st.markdown("""
 <div class="start-conversation">
@@ -1294,7 +1302,7 @@ def render_genie():
                         st.markdown(msg["content"])
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Chat input form (placed at bottom)
+        # Chat input
         with st.form(key="genie_chat_form", clear_on_submit=True):
             col_in, col_btn = st.columns([0.85, 0.15])
             with col_in:
@@ -1312,11 +1320,9 @@ def render_genie():
 
 
 def process_user_question(user_question: str, quick_map: dict):
-    """Process user question and replace previous conversation."""
     with st.spinner("Generating insights..."):
         cached = get_cache(user_question)
         if cached:
-            # Clear old messages
             st.session_state.current_messages = []
             st.session_state.current_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
             assistant_content = cached.get('analyst_response', 'Analysis complete.')
@@ -1348,7 +1354,6 @@ def process_user_question(user_question: str, quick_map: dict):
             else:
                 result = process_custom_query(user_question)
 
-            # Clear old messages and add new ones
             st.session_state.current_messages = []
             st.session_state.current_messages.append({"role": "user", "content": user_question, "timestamp": datetime.now()})
             if result.get("layout") != "error":
