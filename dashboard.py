@@ -1,4 +1,4 @@
-# dashboard.py
+​# dashboard.py
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -222,6 +222,38 @@ def inject_dashboard_css():
         padding: 0 !important;
         margin: 0 !important;
         box-shadow: none !important;
+    }
+
+    /* Invoice card navigate button - styled to look like the circle inside the card */
+    div[data-testid="stVerticalBlock"] .inv-nav-btn > div > button {
+        background: #d1d5db !important;
+        border-radius: 50% !important;
+        width: 70px !important;
+        height: 70px !important;
+        padding: 0 !important;
+        border: none !important;
+        font-size: 0.85rem !important;
+        font-weight: 700 !important;
+        color: #111827 !important;
+        line-height: 1.2 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-shadow: none !important;
+        transition: background 0.2s ease, transform 0.2s ease !important;
+    }
+    div[data-testid="stVerticalBlock"] .inv-nav-btn > div > button:hover {
+        background: #9ca3af !important;
+        transform: scale(1.05) !important;
+    }
+    /* Selected state - blue circle */
+    div[data-testid="stVerticalBlock"] .inv-nav-btn-selected > div > button {
+        background: #3b82f6 !important;
+        color: white !important;
+    }
+    div[data-testid="stVerticalBlock"] .inv-nav-btn-selected > div > button:hover {
+        background: #2563eb !important;
     }
 </style>
 """,
@@ -617,6 +649,14 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     # Get selected invoice from session state (for highlighting)
     selected_invoice = st.session_state.get("selected_invoice", None)
 
+    # Determine card background style based on status
+    if status_label == "Overdue":
+        bg_style = "background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border: 1px solid #fecaca;"
+    elif status_label == "Disputed":
+        bg_style = "background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border: 1px solid #fde68a;"
+    else:
+        bg_style = "background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border: 1px solid #bfdbfe;"
+
     # Render cards in 4-column grid (2 rows of 4)
     for row_start in range(0, len(page_df), 4):
         cols = st.columns(4)
@@ -638,70 +678,70 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                     else ""
                 )
 
-                # Determine if this invoice is selected
                 is_selected = selected_invoice == inv_num
-
-                # Determine background color based on status
-                if status_label == "Overdue":
-                    bg_style = "background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border: 1px solid #fecaca;"
-                elif status_label == "Disputed":
-                    bg_style = "background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border: 1px solid #fde68a;"
-                else:
-                    bg_style = "background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border: 1px solid #bfdbfe;"
-
-                # Circle button styling - blue if selected, gray otherwise
                 circle_bg = "#3b82f6" if is_selected else "#d1d5db"
-                text_color_top = "white" if is_selected else "#111827"
+                text_color = "white" if is_selected else "#111827"
                 text_color_bottom = "white" if is_selected else "#6b7280"
 
                 with cols[col_idx]:
-                    # Create unique key for this card
+                    # Card top row: circle button on left, status + amount on right
                     card_key = f"card_{page}_{item_idx}_{inv_num}"
 
-                    # Render the card with clickable circle
-                    st.markdown(
-                        f"""
-<div style="{bg_style} border-radius: 16px; padding: 1rem; min-height: 150px;">
-<div style="display: flex; justify-content: space-between; align-items: flex-start;">
-<div id="circle_{card_key}" style="
-                                    background: {circle_bg};
-                                    border-radius: 50%;
-                                    width: 70px;
-                                    height: 70px;
-                                    display: flex;
-                                    flex-direction: column;
-                                    justify-content: center;
-                                    align-items: center;
-                                    cursor: pointer;
-                                    transition: all 0.2s ease;
-                                ">
-<div style="font-size: 1rem; font-weight: 700; color: {text_color_top}; line-height: 1.2;">{inv_top}</div>
-<div style="font-size: 1.2rem; font-weight: 700; color: {text_color_bottom}; line-height: 1.2;">{inv_bottom}</div>
-</div>
-<div style="text-align: right;">
-<span class="invoice-status {status_class}">{status_label}</span>
-<div class="invoice-amount" style="margin-top: 0.5rem;">{amt}</div>
-</div>
-</div>
-<div style="margin-top: 0.75rem;">
-<div class="invoice-due-date">Due: {due}</div>
-<div class="invoice-vendor">{vendor}</div>
-</div>
-</div>
-""",
-                        unsafe_allow_html=True,
-                    )
+                    # Render the static parts of the card (status badge, amount, due date, vendor)
+                    # using a container so the button sits flush inside
+                    with st.container():
+                        # Top row: circle (button) + status/amount
+                        left_col, right_col = st.columns([1, 1.4])
 
-                    # Invisible button overlaid on the circle area for click handling
-                    btn_col1, btn_col2 = st.columns([1, 2])
-                    with btn_col1:
-                        if st.button(
-                            "⠀",  # Invisible character
-                            key=f"inv_click_{card_key}",
-                            help=f"{inv_num}",
-                            use_container_width=True,
-                        ):
-                            navigate_to_invoice(inv_num)
+                        with left_col:
+                            # Wrap in a div to apply circle styling via CSS key
+                            nav_css_class = "inv-nav-btn-selected" if is_selected else "inv-nav-btn"
+                            st.markdown(
+                                f'<div class="{nav_css_class}">',
+                                unsafe_allow_html=True,
+                            )
+                            if st.button(
+                                f"{inv_top}\n{inv_bottom}",
+                                key=f"inv_nav_{card_key}",
+                                use_container_width=False,
+                                help=f"View invoice {inv_num}",
+                            ):
+                                navigate_to_invoice(inv_num)
+                            st.markdown("</div>", unsafe_allow_html=True)
+
+                        with right_col:
+                            st.markdown(
+                                f"""
+<span class="invoice-status {status_class}">{status_label}</span>
+<div class="invoice-amount" style="margin-top: 0.4rem;">{amt}</div>
+""",
+                                unsafe_allow_html=True,
+                            )
+
+                        # Bottom: due date + vendor
+                        st.markdown(
+                            f"""
+<div class="invoice-due-date" style="margin-top: 0.25rem;">Due: {due}</div>
+<div class="invoice-vendor">{vendor}</div>
+""",
+                            unsafe_allow_html=True,
+                        )
+
+                        # Card border wrapper (visual only — wraps the whole card in colored bg)
+                        # Injected via markdown behind the container using negative margin trick
+                        st.markdown(
+                            f"""
+<style>
+  div[data-testid="stVerticalBlock"]:has(> div > div > button[title="View invoice {inv_num}"]) {{
+    {bg_style}
+    border-radius: 16px;
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+  }}
+</style>
+""",
+                            unsafe_allow_html=True,
+                        )
 
         st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
 
