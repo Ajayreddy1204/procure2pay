@@ -5,6 +5,7 @@ import json
 import html
 import uuid
 import re
+import altair as alt  # <-- IMPORT ADDED
 from datetime import datetime
 from athena_client import run_query
 from bedrock_client import ask_bedrock
@@ -1208,7 +1209,7 @@ def render_genie():
     left_info, right_chat = st.columns([0.35, 0.65], gap="large")
 
     with left_info:
-        # Saved insights (no emoji)
+        # Saved insights (only show header and items if any)
         st.markdown("##### Saved insights")
         insights = get_saved_insights_cached(page="genie")
         if insights:
@@ -1216,11 +1217,10 @@ def render_genie():
                 if st.button(f"› {ins['title'][:40]}...", key=f"insight_{ins['id']}", use_container_width=True):
                     st.session_state.auto_run_query = ins["question"]
                     st.rerun()
-        else:
-            st.caption("No saved insights yet")
+        # No "No saved insights yet" message – just leave blank
         st.markdown("---")
 
-        # Frequently asked by you (no emoji)
+        # Frequently asked by you (always show suggestions if no FAQs)
         st.markdown("##### Frequently asked by you")
         faqs = get_frequent_questions_by_user_cached(5)
         if faqs:
@@ -1236,14 +1236,13 @@ def render_genie():
                     st.rerun()
         st.markdown("---")
 
-        # Most frequent (all) (no emoji)
+        # Most frequent (all) – show only header, no empty message
         st.markdown("##### Most frequent (all)")
         all_faqs = get_frequent_questions_all_cached(5)
         if all_faqs:
             for faq in all_faqs[:5]:
                 st.markdown(f"<div style='color: #64748b; font-size: 0.85rem; padding: 0.25rem 0;'>› {faq['query'][:40]}...</div>", unsafe_allow_html=True)
-        else:
-            st.caption("No questions yet")
+        # No "No questions yet" message
 
     with right_chat:
         st.markdown('<div style="text-align: right; margin-bottom: 0.5rem;"><span style="font-size: 1rem; font-weight: 600; color: #1e293b;">AI Assistant</span></div>', unsafe_allow_html=True)
