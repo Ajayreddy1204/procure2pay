@@ -432,12 +432,20 @@ def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, star
 
 
 # ------------------------------------------------------------
-# Helper: Navigate to Invoice Tab using experimental query params
+# Helper: Navigate to Invoice Tab (sets session state and page)
 # ------------------------------------------------------------
 def navigate_to_invoice(invoice_number):
-    """Set query parameters to navigate to Invoices tab with a specific invoice."""
+    """Set session state to navigate to Invoices tab with specific invoice."""
     inv_str = format_invoice_number(invoice_number)
+    # Store the invoice number for the Invoices page to display detail
+    st.session_state.selected_invoice = inv_str
+    # Clear any lingering search term to avoid confusion
+    st.session_state.inv_search_q = ""
+    # Set the active page to "Invoices" (as used in app.py)
+    st.session_state.page = "Invoices"
+    # Also set query params for robustness (optional)
     st.experimental_set_query_params(tab="Invoices", invoice=inv_str)
+    # Trigger rerun to navigate
     st.rerun()
 
 
@@ -606,9 +614,8 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
     end_idx = start_idx + items_per_page
     page_df = attention_df.iloc[start_idx:end_idx]
 
-    # Get selected invoice from URL (experimental)
-    query_params = st.experimental_get_query_params()
-    selected_invoice = query_params.get("invoice", [None])[0]
+    # Get selected invoice from session state (for highlighting)
+    selected_invoice = st.session_state.get("selected_invoice", None)
 
     # Render cards in 4-column grid (2 rows of 4)
     for row_start in range(0, len(page_df), 4):
