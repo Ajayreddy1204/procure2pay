@@ -263,10 +263,10 @@ def render_invoices():
     st.markdown("Search, track and manage all invoices in one place")
 
     # --------------------------------------------------------
-    # NEW: Read invoice number from query parameters (set by dashboard)
+    # Read invoice number from URL using experimental API
     # --------------------------------------------------------
-    query_params = st.query_params
-    selected_invoice = query_params.get("invoice")
+    query_params = st.experimental_get_query_params()
+    selected_invoice = query_params.get("invoice", [None])[0]
 
     if selected_invoice:
         inv_sql = f"""
@@ -297,14 +297,14 @@ def render_invoices():
         inv_df = run_query(inv_sql)
         if not inv_df.empty:
             render_invoice_detail(inv_df.iloc[0].to_dict(), selected_invoice)
-            # Back button: clear the invoice query parameter
+            # Back button: clear the invoice parameter but keep tab
             if st.button("← Back to Invoices List", use_container_width=True):
-                st.query_params.update({"invoice": None})
+                st.experimental_set_query_params(tab="Invoices")
                 st.rerun()
             return
         else:
             st.warning(f"Invoice {selected_invoice} not found. Clearing selection.")
-            st.query_params.update({"invoice": None})
+            st.experimental_set_query_params(tab="Invoices")
             st.rerun()
 
     # ---- Invoice List View (unchanged) ----
