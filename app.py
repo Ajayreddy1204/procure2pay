@@ -61,13 +61,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# Sync query parameters with session state
+# Sync query parameters with session state (experimental API)
 # ------------------------------------------------------------
-query_params = st.query_params
+query_params = st.experimental_get_query_params()
 
 # If 'tab' is in URL, set the current page
 if "tab" in query_params:
-    tab_value = query_params["tab"]
+    tab_value = query_params["tab"][0]  # returns list
     if tab_value == "Dashboard":
         st.session_state.page = "Dashboard"
     elif tab_value == "Genie":
@@ -95,20 +95,22 @@ with col_nav:
     nav_cols = st.columns(4)
     current_page = st.session_state.page
 
-    # Helper to update both session state and URL
+    # Helper to update both session state and URL (experimental)
     def set_page(page_name):
         st.session_state.page = page_name
-        # Map page name to tab value (lowercase for URL)
+        # Map page name to tab value
         tab_map = {
             "Dashboard": "Dashboard",
             "Genie": "Genie",
             "Forecast": "Forecast",
             "Invoices": "Invoices"
         }
-        st.query_params.update({"tab": tab_map[page_name]})
-        # Keep invoice param only if on Invoices and it exists, else remove
-        if page_name != "Invoices" and "invoice" in st.query_params:
-            del st.query_params["invoice"]
+        # Preserve invoice param if on Invoices, else remove
+        current_params = st.experimental_get_query_params()
+        new_params = {"tab": tab_map[page_name]}
+        if page_name == "Invoices" and "invoice" in current_params:
+            new_params["invoice"] = current_params["invoice"]
+        st.experimental_set_query_params(**new_params)
         st.rerun()
 
     with nav_cols[0]:
