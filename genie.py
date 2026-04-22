@@ -296,7 +296,7 @@ Respond in plain text using markdown for headings and bullet points. Do not incl
 
 
 # ------------------------------------------------------------
-# Specialised handlers (full implementations)
+# Specialised handlers (full implementations – same as previous)
 # ------------------------------------------------------------
 def process_cash_flow_forecast(question: str) -> dict:
     cf_sql = f"""
@@ -1062,7 +1062,7 @@ def render_quick_analysis_response(result: dict):
 
 
 # ------------------------------------------------------------
-# Main Genie render function – only cards and chat (left column removed)
+# Main Genie render function – with expandable left column
 # ------------------------------------------------------------
 def render_genie():
     st.markdown("""
@@ -1199,78 +1199,117 @@ def render_genie():
 
     st.markdown("---")
 
-    # ----- Only chat area (no left column) -----
-    st.markdown('<div style="text-align: right; margin-bottom: 0.5rem;"><span style="font-size: 1rem; font-weight: 600; color: #1e293b;">AI Assistant</span></div>', unsafe_allow_html=True)
+    # ----- BOTTOM: Two columns (left expanders, right chat) -----
+    left_info, right_chat = st.columns([0.35, 0.65], gap="large")
 
-    if not st.session_state.current_messages:
-        st.markdown("""
+    with left_info:
+        # Saved insights (expandable)
+        with st.expander("Saved insights"):
+            insights = get_saved_insights_cached(page="genie")
+            if insights:
+                for ins in insights[:5]:
+                    if st.button(f"› {ins['title'][:40]}...", key=f"insight_{ins['id']}", use_container_width=True):
+                        st.session_state.auto_run_query = ins["question"]
+                        st.rerun()
+            else:
+                st.caption("No saved insights yet")
+
+        # Frequently asked by you (expandable)
+        with st.expander("Frequently asked by you"):
+            faqs = get_frequent_questions_by_user_cached(5)
+            if faqs:
+                for faq in faqs[:5]:
+                    if st.button(f"› {faq['query'][:40]}...", key=f"faq_user_{faq['query'][:20]}", use_container_width=True):
+                        st.session_state.genie_prefill = faq["query"]
+                        st.rerun()
+            else:
+                suggestions = ["Total spend YTD and trends", "Top vendors by spend", "Overdue invoices summary"]
+                for sug in suggestions:
+                    if st.button(f"› {sug}", key=f"sug_{sug[:15]}", use_container_width=True):
+                        st.session_state.genie_prefill = sug
+                        st.rerun()
+
+        # Most frequent (all) (expandable)
+        with st.expander("Most frequent (all)"):
+            all_faqs = get_frequent_questions_all_cached(5)
+            if all_faqs:
+                for faq in all_faqs[:5]:
+                    st.markdown(f"<div style='color: #64748b; font-size: 0.85rem; padding: 0.25rem 0;'>› {faq['query'][:40]}...</div>", unsafe_allow_html=True)
+            else:
+                st.caption("No questions yet")
+
+    with right_chat:
+        st.markdown('<div style="text-align: right; margin-bottom: 0.5rem;"><span style="font-size: 1rem; font-weight: 600; color: #1e293b;">AI Assistant</span></div>', unsafe_allow_html=True)
+
+        if not st.session_state.current_messages:
+            st.markdown("""
 <div class="start-conversation">
 <div class="plus-button"><span>+</span></div>
 <div style="font-size: 1.1rem; font-weight: 600; color: #1e293b;">Start a Conversation</div>
 <div style="color: #64748b; font-size: 0.85rem; max-width: 280px; margin: 0.5rem auto;">Ask questions about your Procurement to Pay data, or select a pre-built analysis from the library.</div>
 </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
-        for msg in st.session_state.current_messages:
-            if msg["role"] == "user":
-                st.markdown(f'<div class="message-user"><strong>You</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="message-assistant"><strong>🧞 Genie</strong></div>', unsafe_allow_html=True)
-                if "response" in msg and msg["response"]:
-                    resp = msg["response"]
-                    layout = resp.get("layout")
-                    if layout == "cash_flow":
-                        render_cash_flow_response(resp)
-                    elif layout == "early_payment":
-                        render_early_payment_response(resp)
-                    elif layout == "payment_timing":
-                        render_payment_timing_response(resp)
-                    elif layout == "late_payment_trend":
-                        render_late_payment_trend_response(resp)
-                    elif layout == "grir_hotspots":
-                        render_grir_hotspots(resp)
-                    elif layout == "grir_root_causes":
-                        render_grir_root_causes(resp)
-                    elif layout == "grir_working_capital":
-                        render_grir_working_capital(resp)
-                    elif layout == "grir_vendor_followup":
-                        render_grir_vendor_followup(resp)
-                    elif layout == "quick":
-                        render_quick_analysis_response(resp)
-                    elif layout == "analyst":
-                        if resp.get("analyst_response"):
-                            st.markdown(resp["analyst_response"])
-                        df = pd.DataFrame(resp["df"])
-                        if not df.empty:
-                            st.subheader("Supporting Data")
-                            st.dataframe(df, use_container_width=True, hide_index=True)
-                            chart = auto_chart(df)
-                            if chart:
-                                st.altair_chart(chart, use_container_width=True)
-                        with st.expander("View SQL used"):
-                            st.code(_safe_sql_string(resp.get("sql")), language="sql")
-                    elif layout == "error":
-                        st.error(resp.get("message", "Unknown error"))
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
+            for msg in st.session_state.current_messages:
+                if msg["role"] == "user":
+                    st.markdown(f'<div class="message-user"><strong>You</strong><br/>{html.escape(msg["content"])}</div>', unsafe_allow_html=True)
                 else:
-                    st.markdown(msg["content"])
-        st.markdown('</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="message-assistant"><strong>🧞 Genie</strong></div>', unsafe_allow_html=True)
+                    if "response" in msg and msg["response"]:
+                        resp = msg["response"]
+                        layout = resp.get("layout")
+                        if layout == "cash_flow":
+                            render_cash_flow_response(resp)
+                        elif layout == "early_payment":
+                            render_early_payment_response(resp)
+                        elif layout == "payment_timing":
+                            render_payment_timing_response(resp)
+                        elif layout == "late_payment_trend":
+                            render_late_payment_trend_response(resp)
+                        elif layout == "grir_hotspots":
+                            render_grir_hotspots(resp)
+                        elif layout == "grir_root_causes":
+                            render_grir_root_causes(resp)
+                        elif layout == "grir_working_capital":
+                            render_grir_working_capital(resp)
+                        elif layout == "grir_vendor_followup":
+                            render_grir_vendor_followup(resp)
+                        elif layout == "quick":
+                            render_quick_analysis_response(resp)
+                        elif layout == "analyst":
+                            if resp.get("analyst_response"):
+                                st.markdown(resp["analyst_response"])
+                            df = pd.DataFrame(resp["df"])
+                            if not df.empty:
+                                st.subheader("Supporting Data")
+                                st.dataframe(df, use_container_width=True, hide_index=True)
+                                chart = auto_chart(df)
+                                if chart:
+                                    st.altair_chart(chart, use_container_width=True)
+                            with st.expander("View SQL used"):
+                                st.code(_safe_sql_string(resp.get("sql")), language="sql")
+                        elif layout == "error":
+                            st.error(resp.get("message", "Unknown error"))
+                    else:
+                        st.markdown(msg["content"])
+            st.markdown('</div>', unsafe_allow_html=True)
 
-    # Chat input form (placed at bottom)
-    with st.form(key="genie_chat_form", clear_on_submit=True):
-        col_in, col_btn = st.columns([0.85, 0.15])
-        with col_in:
-            prefill = st.session_state.pop("genie_prefill", "")
-            user_question = st.text_input(
-                "Ask a question",
-                value=prefill,
-                placeholder="Ask a question here...",
-                label_visibility="collapsed"
-            )
-        with col_btn:
-            submitted = st.form_submit_button("→", type="primary", use_container_width=True)
-        if submitted and user_question:
-            process_user_question(user_question, quick_map)
+        # Chat input form (placed at bottom)
+        with st.form(key="genie_chat_form", clear_on_submit=True):
+            col_in, col_btn = st.columns([0.85, 0.15])
+            with col_in:
+                prefill = st.session_state.pop("genie_prefill", "")
+                user_question = st.text_input(
+                    "Ask a question",
+                    value=prefill,
+                    placeholder="Ask a question here...",
+                    label_visibility="collapsed"
+                )
+            with col_btn:
+                submitted = st.form_submit_button("→", type="primary", use_container_width=True)
+            if submitted and user_question:
+                process_user_question(user_question, quick_map)
 
 
 def process_user_question(user_question: str, quick_map: dict):
