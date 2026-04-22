@@ -60,6 +60,27 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ------------------------------------------------------------
+# Sync query parameters with session state
+# ------------------------------------------------------------
+query_params = st.query_params
+
+# If 'tab' is in URL, set the current page
+if "tab" in query_params:
+    tab_value = query_params["tab"]
+    if tab_value == "Dashboard":
+        st.session_state.page = "Dashboard"
+    elif tab_value == "Genie":
+        st.session_state.page = "Genie"
+    elif tab_value == "Forecast":
+        st.session_state.page = "Forecast"
+    elif tab_value == "Invoices":
+        st.session_state.page = "Invoices"
+
+# Default page if not set
+if "page" not in st.session_state:
+    st.session_state.page = "Dashboard"
+
 # Header: Title (left), Navigation (center), Logo (right)
 col_title, col_nav, col_logo = st.columns([1.6, 2.4, 1])
 
@@ -72,23 +93,36 @@ with col_title:
 with col_nav:
     st.markdown('<div class="nav-section">', unsafe_allow_html=True)
     nav_cols = st.columns(4)
-    current_page = st.session_state.get("page", "Dashboard")
+    current_page = st.session_state.page
+
+    # Helper to update both session state and URL
+    def set_page(page_name):
+        st.session_state.page = page_name
+        # Map page name to tab value (lowercase for URL)
+        tab_map = {
+            "Dashboard": "Dashboard",
+            "Genie": "Genie",
+            "Forecast": "Forecast",
+            "Invoices": "Invoices"
+        }
+        st.query_params.update({"tab": tab_map[page_name]})
+        # Keep invoice param only if on Invoices and it exists, else remove
+        if page_name != "Invoices" and "invoice" in st.query_params:
+            del st.query_params["invoice"]
+        st.rerun()
+
     with nav_cols[0]:
         if st.button("Dashboard", use_container_width=True, type="primary" if current_page == "Dashboard" else "secondary"):
-            st.session_state.page = "Dashboard"
-            st.rerun()
+            set_page("Dashboard")
     with nav_cols[1]:
         if st.button("Genie", use_container_width=True, type="primary" if current_page == "Genie" else "secondary"):
-            st.session_state.page = "Genie"
-            st.rerun()
+            set_page("Genie")
     with nav_cols[2]:
         if st.button("Forecast", use_container_width=True, type="primary" if current_page == "Forecast" else "secondary"):
-            st.session_state.page = "Forecast"
-            st.rerun()
+            set_page("Forecast")
     with nav_cols[3]:
         if st.button("Invoices", use_container_width=True, type="primary" if current_page == "Invoices" else "secondary"):
-            st.session_state.page = "Invoices"
-            st.rerun()
+            set_page("Invoices")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col_logo:
@@ -103,9 +137,7 @@ with col_logo:
 
 st.markdown("---")
 
-if "page" not in st.session_state:
-    st.session_state.page = "Dashboard"
-
+# Render the selected page
 if st.session_state.page == "Dashboard":
     render_dashboard()
 elif st.session_state.page == "Genie":
