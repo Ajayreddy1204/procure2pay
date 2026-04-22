@@ -236,12 +236,9 @@ def format_invoice_number(invoice_num):
     """Convert invoice number to integer string, removing any decimal points."""
     if invoice_num is None:
         return ""
-    # Convert to string first
     inv_str = str(invoice_num)
-    # Remove .0 if present (handles float conversion)
     if inv_str.endswith('.0'):
         inv_str = inv_str[:-2]
-    # Try to convert to int and back to string to remove any decimals
     try:
         inv_str = str(int(float(inv_str)))
     except (ValueError, TypeError):
@@ -439,8 +436,10 @@ def render_kpi_rows(cur_df, prev_df, cur_spend, prev_spend, fp_df, auto_df, star
 # ------------------------------------------------------------
 def navigate_to_invoice(invoice_number):
     """Set session state to navigate to invoice tab with specific invoice."""
-    # Store the invoice number to search for
-    st.session_state.search_invoice_number = format_invoice_number(invoice_number)
+    # Store the invoice number for the Invoices page to display detail
+    st.session_state.selected_invoice = format_invoice_number(invoice_number)
+    # Optionally clear any lingering search term to avoid confusion
+    st.session_state.inv_search_q = ""
     # Set the active tab to "Invoices"
     st.session_state.active_tab = "Invoices"
     # Trigger rerun to navigate
@@ -658,7 +657,7 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                     # Create unique key for this card
                     card_key = f"card_{page}_{item_idx}_{inv_num}"
 
-                    # Render the card with clickable circle using a form to handle the click
+                    # Render the card with clickable circle
                     st.markdown(
                         f"""
 <div style="{bg_style} border-radius: 16px; padding: 1rem; min-height: 150px;">
@@ -692,14 +691,13 @@ def render_needs_attention(rng_start, rng_end, vendor_where):
                         unsafe_allow_html=True,
                     )
 
-                    # Invisible button overlaid on the card area for click handling
-                    # Using columns to position the button over the circle area
+                    # Invisible button overlaid on the circle area for click handling
                     btn_col1, btn_col2 = st.columns([1, 2])
                     with btn_col1:
                         if st.button(
                             "⠀",  # Invisible character
                             key=f"inv_click_{card_key}",
-                            help=f"{inv_num}",   # <-- CHANGED: tooltip now shows only invoice number
+                            help=f"{inv_num}",   # Tooltip shows only invoice number
                             use_container_width=True,
                         ):
                             navigate_to_invoice(inv_num)
