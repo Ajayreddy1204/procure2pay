@@ -4,7 +4,7 @@ import boto3
 import awswrangler as wr
 import pandas as pd
 from decimal import Decimal
-from config import DATABASE, ATHENA_REGION
+from config import DATABASE
 
 @st.cache_resource
 def get_aws_session():
