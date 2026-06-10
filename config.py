@@ -1,12 +1,11 @@
 # config.py
-import os
-from datetime import date, timedelta
-
 DATABASE = "procure2pay"
 ATHENA_REGION = "us-east-1"
 BEDROCK_MODEL_ID = "amazon.nova-micro-v1:0"
 DB_PATH = "procureiq.db"
 LOGO_URL = "https://th.bing.com/th/id/OIP.Vy1yFQtg8-D1SsAxcqqtSgHaE6?w=235&h=180&c=7&r=0&o=7&dpr=1.5&pid=1.7&rm=3"
+
+from datetime import date, timedelta
 
 def compute_range_preset(preset: str):
     today = date.today()
