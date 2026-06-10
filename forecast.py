@@ -1,10 +1,9 @@
 # forecast.py
 import streamlit as st
 import pandas as pd
-from datetime import date
-from athena_client import run_query
-from utils import abbr_currency, safe_number, safe_int, alt_line_monthly
 from config import DATABASE
+from utils import abbr_currency, safe_number, safe_int, safe_dataframe_display
+from athena_client import run_query
 
 def render_forecast():
     cf_sql = f"""
@@ -136,7 +135,7 @@ def render_forecast():
         st.markdown("---")
         st.markdown("#### Obligations by time bucket")
         if not cf_df.empty:
-            st.dataframe(cf_df, use_container_width=True, hide_index=True)
+            st.dataframe(safe_dataframe_display(cf_df), use_container_width=True, hide_index=True)
             csv = cf_df.to_csv(index=False).encode('utf-8')
             st.download_button("Download forecast (CSV)", data=csv, file_name="cash_flow_forecast.csv", mime="text/csv")
         else:
@@ -159,7 +158,6 @@ def render_forecast():
 
     with tab2:
         st.markdown("#### GR/IR Reconciliation")
-
         grir_summary_sql = f"""
             WITH latest AS (
                 SELECT year, month, invoice_count, total_grir_blnc
@@ -195,17 +193,68 @@ def render_forecast():
             year = safe_int(row.get("year", 0))
             month = safe_int(row.get("month", 0))
 
-            grir_cols = st.columns(4)
-            grir_cols[0].metric("TOTAL GR/IR", abbr_currency(total_grir))
-            grir_cols[1].metric("% > 60 DAYS", f"{pct_over_60:.1f}%")
-            grir_cols[2].metric("> 60 DAYS AMOUNT", abbr_currency(amount_over_60))
-            grir_cols[3].metric("> 60 DAYS ITEMS", f"{cnt_over_60:,}")
+            st.markdown("""
+            <style>
+            .grir-card {
+                border-radius: 16px;
+                padding: 1rem 1.2rem;
+                background: linear-gradient(135deg, #fef9c3 0%, #fef08a 100%);
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+                text-align: left;
+            }
+            .grir-card-title {
+                font-size: 0.7rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                color: #374151;
+                margin-bottom: 0.5rem;
+            }
+            .grir-card-value {
+                font-size: 2rem;
+                font-weight: 800;
+                color: #111827;
+                line-height: 1.1;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.markdown(f"""
+                <div class="grir-card">
+                    <div class="grir-card-title">TOTAL GR/IR</div>
+                    <div class="grir-card-value">{abbr_currency(total_grir)}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col2:
+                st.markdown(f"""
+                <div class="grir-card">
+                    <div class="grir-card-title">% &gt; 60 DAYS</div>
+                    <div class="grir-card-value">{pct_over_60:.1f}%</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col3:
+                st.markdown(f"""
+                <div class="grir-card">
+                    <div class="grir-card-title">60 DAYS AMOUNT</div>
+                    <div class="grir-card-value">{abbr_currency(amount_over_60)}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col4:
+                st.markdown(f"""
+                <div class="grir-card">
+                    <div class="grir-card-title">60 DAYS ITEMS</div>
+                    <div class="grir-card-value">{cnt_over_60:,}</div>
+                </div>
+                """, unsafe_allow_html=True)
 
             st.caption(f"GR/IR position for {year:04d}-{month:02d}: {grir_items:,} items outstanding; {pct_over_60:.1f}% of balance and {cnt_over_60:,} items are older than 60 days.")
 
             trend_sql = f"""
                 SELECT
-                    DATE_PARSE(CAST(year AS VARCHAR) || '-' || LPAD(CAST(month AS VARCHAR), 2, '0') || '-01', '%Y-%m-%d') AS month_date,
+                    year,
+                    month,
                     invoice_count,
                     total_grir_blnc
                 FROM {DATABASE}.gr_ir_outstanding_balance_vw
@@ -214,32 +263,20 @@ def render_forecast():
             """
             trend_df = run_query(trend_sql)
             if not trend_df.empty:
-                trend_df = trend_df.sort_values("month_date")
                 st.markdown("**GR/IR outstanding trend (last 24 months)**")
-                try:
-                    alt_line_monthly(
-                        trend_df.rename(columns={"month_date": "MONTH", "total_grir_blnc": "VALUE"}),
-                        month_col="MONTH",
-                        value_col="VALUE",
-                        height=250,
-                        title="Total GR/IR balance over time",
-                    )
-                except Exception:
-                    st.dataframe(trend_df, use_container_width=True)
+                st.dataframe(safe_dataframe_display(trend_df), use_container_width=True, hide_index=True)
         else:
             st.info("No GR/IR data found.")
 
         st.markdown("---")
         st.markdown("### GR/IR Clearing Playbook")
-        st.markdown("Each step opens Genie with a pre-built prompt that uses the `gr_ir_outstanding` and related verified queries so you get concrete actions (which POs to clear, where to chase receipts, and how much working capital you can release).")
-
+        st.markdown("Each step opens Genie with a pre-built prompt that uses the `gr_ir_outstanding` and related verified queries so you get context on chase receipts, and how much working capital you can release.")
         clearing_actions = [
             ("1. Identify top GR/IR hotspots to clear first", "Show GR/IR outstanding balance by month and highlight which recent months have the highest GR/IR balance so we can prioritize clearing."),
             ("2. Explain likely GR/IR root causes", "Using GR/IR aging and outstanding balance data, explain the likely root-cause buckets (missing goods receipt, invoice not posted, price or quantity mismatch) and for each bucket suggest 2–3 concrete remediation actions."),
             ("3. Quantify working-capital benefit from clearing old GR/IR", "Estimate the working capital that would be released by clearing all GR/IR items older than 60 and 90 days, by month."),
             ("4. Draft vendor follow-up messages for top GR/IR items", "Based on GR/IR aging and outstanding balances, draft vendor-facing follow-up templates we can use for high-priority GR/IR items, with realistic subject lines and concise bullet points.")
         ]
-
         for label, question in clearing_actions:
             if st.button(label, use_container_width=True):
                 st.session_state.auto_run_query = question
