@@ -1,9 +1,9 @@
 # bedrock_client.py
-import json
 import streamlit as st
 import boto3
+import json
 from functools import lru_cache
-from config import BEDROCK_MODEL_ID, ATHENA_REGION
+from config import ATHENA_REGION, BEDROCK_MODEL_ID
 
 @st.cache_resource
 def get_bedrock_runtime():
